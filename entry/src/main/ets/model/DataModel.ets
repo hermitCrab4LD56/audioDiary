@@ -49,8 +49,43 @@ export enum PlayState {
  */
 export enum TabType {
   ALL = 0,
-  RECORD = 1,
   GROUP = 2
+}
+
+/**
+ * 多选模式状态
+ */
+export interface MultiSelectState {
+  isMultiSelectMode: boolean;
+  selectedRecords: Set<number>; // 选中的音频记录ID集合
+}
+
+/**
+ * 分组操作类型
+ */
+export enum GroupOperationType {
+  ADD_TO_EXISTING = 'add_to_existing',
+  CREATE_NEW = 'create_new'
+}
+
+/**
+ * 分组操作参数
+ */
+export interface GroupOperationParams {
+  type: GroupOperationType;
+  groupId?: number; // 添加到现有分组时的分组ID
+  groupName?: string; // 创建新分组时的分组名称
+  recordIds: number[]; // 要操作的音频记录ID数组
+}
+
+/**
+ * 动态Tab项
+ */
+export interface DynamicTab {
+  id: number;
+  type: TabType;
+  name: string;
+  groupId?: number; // 分组Tab的分组ID
 }
 
 /**

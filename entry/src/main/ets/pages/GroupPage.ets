@@ -66,7 +66,7 @@ struct GroupPage {
       hilog.info(DOMAIN, 'GroupPage', `Loaded ${this.groups.length} groups`);
     } catch (error) {
       hilog.error(DOMAIN, 'GroupPage', `Failed to load groups: ${JSON.stringify(error)}`);
-      this.showToast('加载分组失败');
+      this.showToast('Failed to load groups');
     } finally {
       this.isLoading = false;
     }
@@ -152,7 +152,7 @@ struct GroupPage {
   private async createGroup(name: string): Promise<void> {
     try {
       if (!name.trim()) {
-        this.showToast('请输入分组名称');
+        this.showToast('Group name cannot be empty');
         return;
       }
 
@@ -176,13 +176,13 @@ struct GroupPage {
       this.groups.unshift(newGroup);
       this.filterGroups();
       
-      this.showToast('分组创建成功');
+      this.showToast('Group created successfully');
       this.closeCreateDialog();
       
       hilog.info(DOMAIN, 'GroupPage', `Group created: ${name}`);
     } catch (error) {
       hilog.error(DOMAIN, 'GroupPage', `Failed to create group: ${JSON.stringify(error)}`);
-      this.showToast('创建分组失败');
+      this.showToast('Failed to create group');
     }
   }
 

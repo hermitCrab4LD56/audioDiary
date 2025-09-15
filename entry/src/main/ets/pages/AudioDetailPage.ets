@@ -45,7 +45,7 @@ struct AudioDetailPage {
       this.audioId = params['audioId'] as number;
       await this.initializePage();
     } else {
-      this.showToast('音频ID无效');
+      this.showToast('Invalid audio ID');
       this.navigateBack();
     }
   }
@@ -76,7 +76,7 @@ struct AudioDetailPage {
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to initialize page: ${JSON.stringify(error)}`);
-      this.showToast('初始化页面失败');
+      this.showToast('Failed to initialize page');
     } finally {
       this.isLoading = false;
     }
@@ -89,7 +89,7 @@ struct AudioDetailPage {
     try {
       this.audioRecord = await this.databaseService.getAudioRecordById(this.audioId);
       if (!this.audioRecord) {
-        this.showToast('音频记录不存在');
+        this.showToast('Audio record does not exist');
         this.navigateBack();
         return;
       }
@@ -100,7 +100,7 @@ struct AudioDetailPage {
       hilog.info(DOMAIN, 'AudioDetailPage', `Loaded audio record: ${this.audioRecord.fileName}`);
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to load audio record: ${JSON.stringify(error)}`);
-      this.showToast('加载音频记录失败');
+      this.showToast('Failed to load audio record');
     }
   }
 
@@ -128,7 +128,7 @@ struct AudioDetailPage {
 
       // 设置错误回调
       this.audioPlayerService.setErrorCallback((error: string) => {
-        this.showToast(`播放错误: ${error}`);
+        this.showToast(`Playback error: ${error}`);
       });
 
       // 准备播放
@@ -136,7 +136,7 @@ struct AudioDetailPage {
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to initialize player: ${JSON.stringify(error)}`);
-      this.showToast('初始化播放器失败');
+      this.showToast('Failed to initialize player');
     }
   }
 
@@ -167,7 +167,7 @@ struct AudioDetailPage {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to toggle play/pause: ${JSON.stringify(error)}`);
-      this.showToast('播放控制失败');
+      this.showToast('Playback failed');
     }
   }
 
@@ -181,7 +181,7 @@ struct AudioDetailPage {
       this.currentPosition = 0;
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to stop playback: ${JSON.stringify(error)}`);
-      this.showToast('停止播放失败');
+      this.showToast('Stop playback failed');
     }
   }
 
@@ -193,7 +193,7 @@ struct AudioDetailPage {
       await this.audioPlayerService.seekTo(position);
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to seek: ${JSON.stringify(error)}`);
-      this.showToast('跳转失败');
+      this.showToast('Seek failed');
     }
   }
 
@@ -206,7 +206,7 @@ struct AudioDetailPage {
       await this.audioPlayerService.setVolume(volume / 100);
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to set volume: ${JSON.stringify(error)}`);
-      this.showToast('设置音量失败');
+      this.showToast('Failed to set volume');
     }
   }
 
@@ -219,7 +219,7 @@ struct AudioDetailPage {
       await this.audioPlayerService.setPlaybackSpeed(speed);
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to set playback speed: ${JSON.stringify(error)}`);
-      this.showToast('设置播放速度失败');
+      this.showToast('Failed to set playback speed');
     }
   }
 
@@ -295,7 +295,7 @@ struct AudioDetailPage {
       // 从数据库删除记录
       await this.databaseService.deleteAudioRecord(this.audioRecord.id);
       
-      this.showToast('音频删除成功');
+      this.showToast('Deleted successfully');
       this.closeDeleteDialog();
       
       // 返回上一页
@@ -305,7 +305,7 @@ struct AudioDetailPage {
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to delete audio record: ${JSON.stringify(error)}`);
-      this.showToast('删除音频失败');
+      this.showToast('Delete failed');
     }
   }
 
@@ -315,7 +315,7 @@ struct AudioDetailPage {
   private async renameAudioRecord(newName: string): Promise<void> {
     try {
       if (!this.audioRecord || !newName.trim()) {
-        this.showToast('请输入有效的文件名');
+        this.showToast('Please enter a valid filename');
         return;
       }
       
@@ -333,12 +333,12 @@ struct AudioDetailPage {
       await this.databaseService.updateAudioRecord(updatedRecord);
       this.audioRecord = updatedRecord;
       
-      this.showToast('重命名成功');
+      this.showToast('Rename successful');
       this.closeRenameDialog();
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to rename audio record: ${JSON.stringify(error)}`);
-      this.showToast('重命名失败');
+      this.showToast('Rename failed');
     }
   }
 
@@ -364,15 +364,15 @@ struct AudioDetailPage {
       this.audioRecord = updatedRecord;
       this.selectedGroupId = groupId;
       
-      const groupName = groupId === 0 ? '未分组' : 
-        this.availableGroups.find(g => g.id === groupId)?.groupName || '未知分组';
+      const groupName = groupId === 0 ? 'Ungrouped' : 
+        this.availableGroups.find(g => g.id === groupId)?.groupName || 'Unknown Group';
       
-      this.showToast(`已移动到${groupName}`);
+      this.showToast(`Moved to ${groupName}`);
       this.closeGroupDialog();
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioDetailPage', `Failed to move to group: ${JSON.stringify(error)}`);
-      this.showToast('移动分组失败');
+      this.showToast('Failed to move to group');
     }
   }
 
@@ -478,11 +478,11 @@ struct AudioDetailPage {
    */
   private getGroupName(): string {
     if (!this.audioRecord?.groupId) {
-      return '未分组';
+      return 'Ungrouped';
     }
     
     const group = this.availableGroups.find(g => g.id === this.audioRecord?.groupId);
-    return group?.groupName || '未知分组';
+    return group?.groupName || 'Unknown Group';
   }
 
   /**

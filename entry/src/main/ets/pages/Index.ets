@@ -1,42 +1,100 @@
+import hilog from '@ohos.hilog';
+import router from '@ohos.router';
+import promptAction from '@ohos.promptAction';
 import { authentication } from '@kit.AccountKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AudioRecord, AudioGroup, TabType, SearchResult } from '../model/DataModel';
-import { DatabaseService } from '../service/DatabaseService';
 import { common } from '@kit.AbilityKit';
-import { router } from '@kit.ArkUI';
+import { DatabaseService } from '../service/DatabaseService';
+import { AudioRecord, AudioGroup, TabType, MultiSelectState, DynamicTab } from '../model/DataModel';
 
-const DOMAIN = 0x0000;
+const DOMAIN = 0xFF00;
+
+
+
+
 
 @Entry
 @Component
 struct Index {
-  @State currentTab: TabType = TabType.ALL;
-  @State audioRecords: AudioRecord[] = [];
-  @State audioGroups: AudioGroup[] = [];
-  @State searchKeyword: string = '';
-  @State isSearchMode: boolean = false;
-  @State searchResults: SearchResult[] = [];
-  @State isLoading: boolean = true;
-  
-  private databaseService = DatabaseService.getInstance();
-  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  @State private audioRecords: AudioRecord[] = [];
+  @State private favoriteRecords: AudioRecord[] = [];
+  @State private groupRecords: AudioRecord[] = [];
+  @State private audioGroups: AudioGroup[] = [];
+  @State private searchResults: AudioRecord[] = [];
+  @State private currentTab: TabType = TabType.ALL;
+  @State private currentGroupId: number = 0;
+  @State private searchKeyword: string = '';
+  @State private isSearchMode: boolean = false;
+  @State private isLoading: boolean = false;
+  @State private dynamicTabs: DynamicTab[] = [];
+  @State private multiSelectState: MultiSelectState = {
+    isMultiSelectMode: false,
+    selectedRecords: new Set<number>()
+  };
+  @State private showGroupSelectionDialog: boolean = false;
+  @State private showCreateGroupDialog: boolean = false;
+  @State private showRenameGroupDialog: boolean = false;
+  @State private showTabContextMenu: boolean = false;
+  @State private newGroupName: string = '';
+  @State private renameGroupName: string = '';
+  @State private selectedTabForAction: DynamicTab | null = null;
 
-  async aboutToAppear(): Promise<void> {
-    hilog.info(DOMAIN, 'Index', 'Page aboutToAppear');
-    await this.initializeData();
-    this.loginWithHuaweiID();
+  private databaseService: DatabaseService = DatabaseService.getInstance();
+  private context = getContext(this) as common.UIAbilityContext;
+
+  aboutToAppear(): void {
+    this.initializeData();
+  }
+
+  onPageShow(): void {
+    // 🔥 关键修复：每次页面显示时都重新加载数据，确保显示最新的录音记录
+    if (!this.isLoading) {
+      const timestamp = new Date().toISOString();
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] onPageShow: 开始重新加载所有数据`);
+      this.reloadAllData();
+    }
   }
 
   /**
-   * 初始化数据
+   * 重新加载所有数据
    */
+  private async reloadAllData(): Promise<void> {
+    const timestamp = new Date().toISOString();
+    try {
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔄 开始重新加载音频记录`);
+      await this.loadAudioRecords();
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] ✅ 音频记录加载完成，当前记录数: ${this.audioRecords.length}`);
+      
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔄 开始重新加载音频分组`);
+      await this.loadAudioGroups();
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] ✅ 音频分组加载完成，当前分组数: ${this.audioGroups.length}`);
+      
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔄 开始重新初始化动态标签`);
+      this.initializeDynamicTabs();
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] ✅ 动态标签初始化完成，当前标签数: ${this.dynamicTabs.length}`);
+      
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🎉 所有数据重新加载完成！`);
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 当前显示的音频列表长度: ${this.getCurrentAudioList().length}`);
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `[${timestamp}] ❌ 重新加载数据时发生错误: ${JSON.stringify(error)}`);
+    }
+  }
+
   private async initializeData(): Promise<void> {
     try {
       this.isLoading = true;
       await this.databaseService.initDatabase(this.context);
+      
+      // 关键修复：启动时自动清理模拟数据
+      hilog.info(DOMAIN, 'Index', 'Cleaning up mock data on startup...');
+      await this.databaseService.cleanupMockData();
+      
+      // 加载音频记录和分组
       await this.loadAudioRecords();
       await this.loadAudioGroups();
+      
+      // 初始化动态标签
+      this.initializeDynamicTabs();
     } catch (error) {
       hilog.error(DOMAIN, 'Index', `Failed to initialize data: ${JSON.stringify(error)}`);
     } finally {
@@ -48,120 +106,282 @@ struct Index {
    * 加载音频记录
    */
   private async loadAudioRecords(): Promise<void> {
+    const timestamp = new Date().toISOString();
     try {
-      this.audioRecords = await this.databaseService.queryAllAudioRecords();
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔄 开始加载音频记录`);
+      this.isLoading = true;
+      
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 📞 调用数据库查询方法`);
+      const records = await DatabaseService.getInstance().queryAllAudioRecords();
+      
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 从数据库获取到 ${records.length} 条音频记录`);
+      
+      if (records.length > 0) {
+        hilog.info(DOMAIN, 'Index', `[${timestamp}] 📝 最新的3条记录详情:`);
+        records.slice(0, 3).forEach((record, index) => {
+          hilog.info(DOMAIN, 'Index', `[${timestamp}]   记录${index + 1}: ID=${record.id}, 文件名='${record.fileName}', 创建时间=${new Date(record.createTime).toLocaleString()}`);
+        });
+      } else {
+        hilog.warn(DOMAIN, 'Index', `[${timestamp}] ⚠️ 没有获取到任何音频记录`);
+      }
+      
+      this.audioRecords = records;
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] ✅ 音频记录已更新到页面状态，当前audioRecords长度: ${this.audioRecords.length}`);
+      
+      // 暂时移除收藏功能，后续会删除收藏tab
+      this.favoriteRecords = [];
+      if (this.currentTab === TabType.GROUP && this.currentGroupId) {
+        // 从所有记录中筛选出指定分组的记录
+        this.groupRecords = records.filter(record => record.groupId === this.currentGroupId);
+      }
+      
     } catch (error) {
-      hilog.error(DOMAIN, 'Index', `Failed to load audio records: ${JSON.stringify(error)}`);
+      hilog.error(DOMAIN, 'Index', `[${timestamp}] ❌ 加载音频记录失败: ${JSON.stringify(error)}`);
+    } finally {
+      this.isLoading = false;
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🏁 音频记录加载完成，isLoading设为false`);
     }
   }
 
-  /**
-   * 加载音频分组
-   */
   private async loadAudioGroups(): Promise<void> {
     try {
-      this.audioGroups = await this.databaseService.queryAllGroups();
+      this.audioGroups = await this.databaseService.getAllGroups();
     } catch (error) {
       hilog.error(DOMAIN, 'Index', `Failed to load audio groups: ${JSON.stringify(error)}`);
     }
   }
 
-  /**
-   * 搜索音频
-   */
   private async searchAudio(keyword: string): Promise<void> {
-    if (!keyword.trim()) {
+    if (keyword.trim() === '') {
       this.isSearchMode = false;
       this.searchResults = [];
       return;
     }
 
+    this.isSearchMode = true;
     try {
-      this.isSearchMode = true;
-      const records = await this.databaseService.searchAudioRecords(keyword);
-      this.searchResults = records.map(record => {
-        const searchResult: SearchResult = {
-          type: 'audio',
-          data: record,
-          matchText: record.fileName
-        };
-        return searchResult;
-      });
+      this.searchResults = await this.databaseService.searchAudioRecords(keyword);
     } catch (error) {
       hilog.error(DOMAIN, 'Index', `Failed to search audio: ${JSON.stringify(error)}`);
     }
   }
 
-  /**
-   * 切换Tab
-   */
-  private onTabChange(tabType: TabType): void {
+  private onTabChange(tabType: TabType, groupId?: number): void {
     this.currentTab = tabType;
-    this.isSearchMode = false;
-    this.searchKeyword = '';
+    this.currentGroupId = groupId || 0;
+    this.exitMultiSelectMode();
+    
+    if (tabType === TabType.GROUP && groupId) {
+      this.loadAudioRecords();
+    }
   }
 
-  /**
-   * 获取当前显示的音频列表
-   */
+  private enterMultiSelectMode(initialRecordId?: number): void {
+    this.multiSelectState = {
+      isMultiSelectMode: true,
+      selectedRecords: new Set<number>(initialRecordId ? [initialRecordId] : [])
+    };
+  }
+
+  private exitMultiSelectMode(): void {
+    this.multiSelectState = {
+      isMultiSelectMode: false,
+      selectedRecords: new Set<number>()
+    };
+  }
+
+  private initializeDynamicTabs(): void {
+    this.dynamicTabs = [
+      { id: 0, type: TabType.ALL, name: '全部' },
+      ...this.audioGroups.map((group, index): DynamicTab => ({
+        id: index + 1,
+        type: TabType.GROUP,
+        name: group.groupName,
+        groupId: group.id
+      }))
+    ];
+  }
+
+  private showGroupSelectionDialogMethod(): void {
+    this.showGroupSelectionDialog = true;
+  }
+
+  private async createNewGroup(): Promise<void> {
+    if (this.newGroupName.trim() === '') return;
+
+    try {
+      await this.databaseService.createGroup(this.newGroupName.trim());
+      await this.loadAudioGroups();
+      this.initializeDynamicTabs();
+      this.showCreateGroupDialog = false;
+      this.newGroupName = '';
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `Failed to create group: ${JSON.stringify(error)}`);
+    }
+  }
+
+  private async addToGroup(groupId: number): Promise<void> {
+    const selectedIds = Array.from(this.multiSelectState.selectedRecords);
+    if (selectedIds.length === 0) return;
+
+    try {
+      // 批量添加音频到分组
+      for (const audioId of selectedIds) {
+        await this.databaseService.addAudioToGroup(audioId, groupId);
+      }
+      await this.loadAudioRecords();
+      this.exitMultiSelectMode();
+      this.showGroupSelectionDialog = false;
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `Failed to add to group: ${JSON.stringify(error)}`);
+    }
+  }
+
+  private selectExistingGroup(groupId: number): void {
+    this.addToGroup(groupId);
+  }
+
+  private showRenameGroupDialogMethod(): void {
+    if (this.selectedTabForAction && this.selectedTabForAction.type === TabType.GROUP) {
+      this.renameGroupName = this.selectedTabForAction.name;
+      this.showRenameGroupDialog = true;
+      this.showTabContextMenu = false;
+    }
+  }
+
+  private async renameGroup(): Promise<void> {
+    if (!this.selectedTabForAction || !this.selectedTabForAction.groupId || this.renameGroupName.trim() === '') {
+      return;
+    }
+
+    try {
+      await this.databaseService.updateGroupName(this.selectedTabForAction.groupId, this.renameGroupName.trim());
+      await this.loadAudioGroups();
+      this.initializeDynamicTabs();
+      this.showRenameGroupDialog = false;
+      this.renameGroupName = '';
+      this.selectedTabForAction = null;
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `Failed to rename group: ${JSON.stringify(error)}`);
+    }
+  }
+
+  private async deleteGroup(): Promise<void> {
+    if (!this.selectedTabForAction || !this.selectedTabForAction.groupId) return;
+
+    try {
+      await this.databaseService.deleteGroup(this.selectedTabForAction.groupId);
+      await this.loadAudioGroups();
+      this.initializeDynamicTabs();
+      
+      if (this.currentTab === TabType.GROUP && this.currentGroupId === this.selectedTabForAction.groupId) {
+        this.onTabChange(TabType.ALL);
+      }
+      
+      this.showTabContextMenu = false;
+      this.selectedTabForAction = null;
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `Failed to delete group: ${JSON.stringify(error)}`);
+    }
+  }
+
   private getCurrentAudioList(): AudioRecord[] {
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, 'Index', `[${timestamp}] 🎯 getCurrentAudioList() 被调用`);
+    hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 当前状态: isSearchMode=${this.isSearchMode}, currentTab=${this.currentTab}`);
+    
+    let resultList: AudioRecord[] = [];
+    
     if (this.isSearchMode) {
-      return this.searchResults
-        .filter(result => result.type === 'audio')
-        .map(result => result.data);
+      resultList = this.searchResults;
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔍 搜索模式 - 返回搜索结果: ${resultList.length} 条记录`);
+    } else {
+      switch (this.currentTab) {
+        case TabType.ALL:
+          resultList = this.audioRecords;
+          hilog.info(DOMAIN, 'Index', `[${timestamp}] 📋 全部标签 - 返回所有记录: ${resultList.length} 条记录`);
+          break;
+        case TabType.GROUP:
+          resultList = this.groupRecords;
+          hilog.info(DOMAIN, 'Index', `[${timestamp}] 👥 分组标签 - 返回分组记录: ${resultList.length} 条记录 (分组ID: ${this.currentGroupId})`);
+          break;
+        default:
+          resultList = this.audioRecords;
+          hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔄 默认情况 - 返回所有记录: ${resultList.length} 条记录`);
+          break;
+      }
     }
-
-    switch (this.currentTab) {
-      case TabType.ALL:
-        return this.audioRecords;
-      case TabType.RECORD:
-        return this.audioRecords.filter(record => record.isTop);
-      case TabType.GROUP:
-        return this.audioRecords.filter(record => record.groupId && record.groupId !== 1);
-      default:
-        return this.audioRecords;
+    
+    if (resultList.length > 0) {
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 📝 返回列表的前3条记录:`);
+      resultList.slice(0, 3).forEach((record, index) => {
+        hilog.info(DOMAIN, 'Index', `[${timestamp}]   记录${index + 1}: ID=${record.id}, 文件名='${record.fileName}', 创建时间=${new Date(record.createTime).toLocaleString()}`);
+      });
+    } else {
+      hilog.warn(DOMAIN, 'Index', `[${timestamp}] ⚠️ 返回的列表为空`);
     }
+    
+    return resultList;
   }
 
-  /**
-   * 跳转到录音页面
-   */
   private navigateToRecord(): void {
-    router.pushUrl({
-      url: 'pages/RecordPage'
-    }).catch((error: BusinessError) => {
-      hilog.error(DOMAIN, 'Index', `Failed to navigate to record page: ${JSON.stringify(error)}`);
-    });
+    router.pushUrl({ url: 'pages/RecordPage' });
   }
 
-  /**
-   * 跳转到分组页面
-   */
   private navigateToGroup(): void {
-    router.pushUrl({
-      url: 'pages/GroupPage'
-    }).catch((error: BusinessError) => {
-      hilog.error(DOMAIN, 'Index', `Failed to navigate to group page: ${JSON.stringify(error)}`);
-    });
+    router.pushUrl({ url: 'pages/GroupPage' });
   }
 
-  /**
-   * 跳转到音频详情页面
-   */
   private navigateToAudioDetail(audioRecord: AudioRecord): void {
     router.pushUrl({
       url: 'pages/AudioDetailPage',
-      params: {
-        audioRecord: audioRecord
-      }
-    }).catch((error: BusinessError) => {
-      hilog.error(DOMAIN, 'Index', `Failed to navigate to audio detail page: ${JSON.stringify(error)}`);
+      params: { audioId: audioRecord.id }
     });
   }
 
   /**
-   * 切换置顶状态
+   * 清理损坏的数据
    */
+  private async cleanupData(): Promise<void> {
+    try {
+      this.isLoading = true;
+      await this.databaseService.cleanupCorruptedData();
+      
+      // 重新加载数据
+      await this.loadAudioRecords();
+      await this.loadAudioGroups();
+      await this.initializeDynamicTabs();
+      
+      // 显示成功提示
+      promptAction.showToast({
+        message: '数据清理完成',
+        duration: 2000
+      });
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `Failed to cleanup data: ${JSON.stringify(error)}`);
+      promptAction.showToast({
+        message: '数据清理失败',
+        duration: 2000
+      });
+    } finally {
+      this.isLoading = false;
+    }
+  }
+
+  private toggleRecordSelection(recordId: number): void {
+    const newSelectedRecords = new Set(this.multiSelectState.selectedRecords);
+    if (newSelectedRecords.has(recordId)) {
+      newSelectedRecords.delete(recordId);
+    } else {
+      newSelectedRecords.add(recordId);
+    }
+    
+    this.multiSelectState = {
+      isMultiSelectMode: this.multiSelectState.isMultiSelectMode,
+      selectedRecords: newSelectedRecords
+    };
+  }
+
   private async toggleTopStatus(audioRecord: AudioRecord): Promise<void> {
     try {
       await this.databaseService.toggleTopStatus(audioRecord.id, !audioRecord.isTop);
@@ -171,9 +391,6 @@ struct Index {
     }
   }
 
-  /**
-   * 格式化时长
-   */
   private formatDuration(duration: number): string {
     const seconds = Math.floor(duration / 1000);
     const minutes = Math.floor(seconds / 60);
@@ -181,9 +398,6 @@ struct Index {
     return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
   }
 
-  /**
-   * 格式化文件大小
-   */
   private formatFileSize(size: number): string {
     if (size < 1024) {
       return `${size}B`;
@@ -194,9 +408,6 @@ struct Index {
     }
   }
 
-  /**
-   * 格式化创建时间
-   */
   private formatCreateTime(timestamp: number): string {
     const date = new Date(timestamp);
     const now = new Date();
@@ -215,171 +426,442 @@ struct Index {
   }
 
   build() {
-    Column() {
-      // 顶部标题栏
-      Row() {
-        Text('音频日记')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#333333')
-        
-        Blank()
-        
-        // 分组按钮
+    Stack() {
+      Column() {
+        // 顶部标题栏
+        Row() {
+          Text('音频日记')
+            .fontSize(20)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#333333')
+          
+          Blank()
+          
+          // 数据清理按钮（调试用）
+          Button() {
+            Text('清理')
+              .fontSize(12)
+              .fontColor('#FF6B35')
+          }
+          .width(50)
+          .height(30)
+          .backgroundColor('#FFF3E0')
+          .borderRadius(15)
+          .margin({ right: 8 })
+          .onClick(() => this.cleanupData())
+          
+          Button() {
+            Image($r('app.media.icon'))
+              .width(20)
+              .height(20)
+              .fillColor('#666666')
+          }
+          .width(40)
+          .height(40)
+          .backgroundColor('#F5F5F5')
+          .borderRadius(20)
+          .onClick(() => this.navigateToGroup())
+        }
+        .width('100%')
+        .height(56)
+        .padding({ left: 16, right: 16 })
+        .backgroundColor('#FFFFFF')
+
+        // 搜索框
+        Row() {
+          Image($r('app.media.icon'))
+            .width(16)
+            .height(16)
+            .fillColor('#999999')
+            .margin({ right: 8 })
+          
+          TextInput({ placeholder: '搜索音频文件', text: this.searchKeyword })
+            .backgroundColor('transparent')
+            .border({ width: 0 })
+            .layoutWeight(1)
+            .onChange((value: string) => {
+              this.searchKeyword = value;
+              this.searchAudio(value);
+            })
+        }
+        .width('100%')
+        .height(40)
+        .padding({ left: 12, right: 12 })
+        .margin({ left: 16, right: 16, top: 8, bottom: 8 })
+        .backgroundColor('#F8F8F8')
+        .borderRadius(20)
+
+        // Tab导航
+        if (!this.isSearchMode) {
+          Row() {
+            ForEach(this.dynamicTabs, (tab: DynamicTab, index?: number) => {
+              Button(tab.name)
+                .fontSize(14)
+                .fontColor((this.currentTab === tab.type && this.currentGroupId === tab.groupId) ? '#007AFF' : '#666666')
+                .backgroundColor('transparent')
+                .border({ width: 0 })
+                .margin({ left: (index !== undefined && index > 0) ? 24 : 0 })
+                .onClick(() => this.onTabChange(tab.type, tab.groupId))
+                .gesture(
+                  tab.type === TabType.GROUP ? 
+                    LongPressGesture({ repeat: false })
+                      .onAction(() => {
+                        this.selectedTabForAction = tab;
+                        this.showTabContextMenu = true;
+                      }) : 
+                    undefined
+                )
+            })
+            
+            Blank()
+          }
+          .width('100%')
+          .height(44)
+          .padding({ left: 16, right: 16 })
+          .backgroundColor('#FFFFFF')
+        }
+
+        // 音频列表
+        if (this.isLoading) {
+          Column() {
+            LoadingProgress()
+              .width(40)
+              .height(40)
+              .color('#007AFF')
+            
+            Text('加载中...')
+              .fontSize(14)
+              .fontColor('#999999')
+              .margin({ top: 8 })
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.Center)
+          .alignItems(HorizontalAlign.Center)
+        } else {
+          List() {
+            ForEach(this.getCurrentAudioList(), (audioRecord: AudioRecord, index?: number) => {
+              ListItem() {
+                this.AudioRecordItemBuilder(audioRecord)
+              }
+              .swipeAction({ end: this.SwipeActionsBuilder(audioRecord) })
+              .onAppear(() => {
+                const timestamp = new Date().toISOString();
+                hilog.info(DOMAIN, 'Index', `[${timestamp}] 🎨 UI渲染 - 渲染音频记录项 #${index !== undefined ? index + 1 : '?'}`);
+                hilog.info(DOMAIN, 'Index', `[${timestamp}] 📝 记录详情: ID=${audioRecord.id}, 文件名='${audioRecord.fileName}', 创建时间=${new Date(audioRecord.createTime).toLocaleString()}`);
+                hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 记录属性: 时长=${audioRecord.duration}ms, 文件大小=${audioRecord.fileSize}bytes, 置顶=${audioRecord.isTop}`);
+              })
+            })
+          }
+          .onAppear(() => {
+            const timestamp = new Date().toISOString();
+            const currentList = this.getCurrentAudioList();
+            hilog.info(DOMAIN, 'Index', `[${timestamp}] 🎨 List组件渲染完成`);
+            hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 当前渲染的音频记录总数: ${currentList.length}`);
+            if (currentList.length === 0) {
+              hilog.warn(DOMAIN, 'Index', `[${timestamp}] ⚠️ 没有音频记录可显示 - 列表为空`);
+            }
+          })
+          .width('100%')
+          .layoutWeight(1)
+          .backgroundColor('#F8F8F8')
+          .divider({
+            strokeWidth: 0.5,
+            color: '#E5E5E5',
+            startMargin: 16,
+            endMargin: 16
+          })
+        }
+
+        // 多选模式操作栏
+        if (this.multiSelectState.isMultiSelectMode) {
+          Row() {
+            Button('取消')
+              .fontSize(14)
+              .fontColor('#666666')
+              .backgroundColor('transparent')
+              .border({ width: 1, color: '#E5E5E5' })
+              .borderRadius(8)
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .onClick(() => this.exitMultiSelectMode())
+            
+            Blank()
+            
+            Text(`已选择 ${this.multiSelectState.selectedRecords.size} 项`)
+              .fontSize(14)
+              .fontColor('#666666')
+            
+            Blank()
+            
+            Button('添加到分组')
+              .fontSize(14)
+              .fontColor('#FFFFFF')
+              .backgroundColor('#007AFF')
+              .borderRadius(8)
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .enabled(this.multiSelectState.selectedRecords.size > 0)
+              .onClick(() => this.showGroupSelectionDialogMethod())
+          }
+          .width('100%')
+          .height(60)
+          .padding({ left: 16, right: 16 })
+          .backgroundColor('#FFFFFF')
+          .border({ width: { top: 0.5 }, color: '#E5E5E5' })
+        }
+
+        // 底部录音按钮
+        Row() {
+          Button() {
+            Image($r('app.media.icon'))
+              .width(24)
+              .height(24)
+              .fillColor('#FFFFFF')
+          }
+          .width(56)
+          .height(56)
+          .backgroundColor('#007AFF')
+          .borderRadius(28)
+          .onClick(() => this.navigateToRecord())
+        }
+        .width('100%')
+        .height(80)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
+        .backgroundColor('#FFFFFF')
+      }
+      .width('100%')
+      .height('100%')
+
+      // Tab长按菜单
+      if (this.showTabContextMenu) {
+        Column() {
+          Button('重命名')
+            .fontSize(16)
+            .fontColor('#333333')
+            .backgroundColor('#FFFFFF')
+            .width('100%')
+            .height(44)
+            .onClick(() => this.showRenameGroupDialogMethod())
+          
+          Divider()
+            .color('#E5E5E5')
+          
+          Button('删除')
+            .fontSize(16)
+            .fontColor('#FF3B30')
+            .backgroundColor('#FFFFFF')
+            .width('100%')
+            .height(44)
+            .onClick(() => this.deleteGroup())
+        }
+        .width(120)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(8)
+        .shadow({ radius: 8, color: 'rgba(0,0,0,0.2)' })
+        .position({ x: '50%', y: '30%' })
+      }
+
+      // 选择分组弹窗
+      if (this.showGroupSelectionDialog) {
+        Column() {
+          Text('选择分组')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+            .margin({ bottom: 20 })
+          
+          List() {
+            ForEach(this.audioGroups, (group: AudioGroup) => {
+              ListItem() {
+                Text(group.groupName)
+                  .fontSize(16)
+                  .fontColor('#333333')
+                  .width('100%')
+                  .height(44)
+                  .textAlign(TextAlign.Start)
+                  .onClick(() => this.selectExistingGroup(group.id))
+              }
+            })
+            
+            ListItem() {
+              Text('+ 创建新分组')
+                .fontSize(16)
+                .fontColor('#007AFF')
+                .width('100%')
+                .height(44)
+                .textAlign(TextAlign.Start)
+                .onClick(() => {
+                  this.showGroupSelectionDialog = false;
+                  this.showCreateGroupDialog = true;
+                })
+            }
+          }
+          .width('100%')
+          .height(200)
+          
+          Button('取消')
+            .fontSize(16)
+            .fontColor('#666666')
+            .backgroundColor('#F5F5F5')
+            .width('100%')
+            .height(44)
+            .margin({ top: 20 })
+            .onClick(() => {
+              this.showGroupSelectionDialog = false;
+            })
+        }
+        .width('80%')
+        .padding(20)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(12)
+        .shadow({ radius: 12, color: 'rgba(0,0,0,0.2)' })
+        .position({ x: '10%', y: '30%' })
+      }
+
+      // 创建新分组弹窗
+      if (this.showCreateGroupDialog) {
+        Column() {
+          Text('创建新分组')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+            .margin({ bottom: 20 })
+          
+          TextInput({ placeholder: '请输入分组名称', text: this.newGroupName })
+            .fontSize(16)
+            .width('100%')
+            .height(44)
+            .backgroundColor('#F5F5F5')
+            .borderRadius(8)
+            .padding({ left: 12, right: 12 })
+            .margin({ bottom: 20 })
+            .onChange((value: string) => {
+              this.newGroupName = value;
+            })
+          
+          Row() {
+            Button('取消')
+              .fontSize(16)
+              .fontColor('#666666')
+              .backgroundColor('#F5F5F5')
+              .width('48%')
+              .height(44)
+              .onClick(() => {
+                this.showCreateGroupDialog = false;
+                this.newGroupName = '';
+              })
+            
+            Blank()
+            
+            Button('创建')
+              .fontSize(16)
+              .fontColor('#FFFFFF')
+              .backgroundColor('#007AFF')
+              .width('48%')
+              .height(44)
+              .enabled(this.newGroupName.trim().length > 0)
+              .onClick(() => this.createNewGroup())
+          }
+          .width('100%')
+        }
+        .width('80%')
+        .padding(20)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(12)
+        .shadow({ radius: 12, color: 'rgba(0,0,0,0.2)' })
+        .position({ x: '10%', y: '30%' })
+      }
+
+      // 重命名分组弹窗
+      if (this.showRenameGroupDialog) {
+        Column() {
+          Text('重命名分组')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium)
+            .margin({ bottom: 20 })
+          
+          TextInput({ placeholder: '请输入新的分组名称', text: this.renameGroupName })
+            .fontSize(16)
+            .width('100%')
+            .height(44)
+            .backgroundColor('#F5F5F5')
+            .borderRadius(8)
+            .padding({ left: 12, right: 12 })
+            .margin({ bottom: 20 })
+            .onChange((value: string) => {
+              this.renameGroupName = value;
+            })
+          
+          Row() {
+            Button('取消')
+              .fontSize(16)
+              .fontColor('#666666')
+              .backgroundColor('#F5F5F5')
+              .width('48%')
+              .height(44)
+              .onClick(() => {
+                this.showRenameGroupDialog = false;
+                this.renameGroupName = '';
+                this.selectedTabForAction = null;
+              })
+            
+            Blank()
+            
+            Button('确定')
+              .fontSize(16)
+              .fontColor('#FFFFFF')
+              .backgroundColor('#007AFF')
+              .width('48%')
+              .height(44)
+              .enabled(this.renameGroupName.trim().length > 0)
+              .onClick(() => this.renameGroup())
+          }
+          .width('100%')
+        }
+        .width('80%')
+        .padding(20)
+        .backgroundColor('#FFFFFF')
+        .borderRadius(12)
+        .shadow({ radius: 12, color: 'rgba(0,0,0,0.2)' })
+        .position({ x: '10%', y: '30%' })
+      }
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  AudioRecordItemBuilder(audioRecord: AudioRecord) {
+    Row() {
+      if (this.multiSelectState.isMultiSelectMode) {
+        Button() {
+          if (this.multiSelectState.selectedRecords.has(audioRecord.id)) {
+            Image($r('app.media.icon'))
+              .width(16)
+              .height(16)
+              .fillColor('#FFFFFF')
+          }
+        }
+        .width(24)
+        .height(24)
+        .backgroundColor(this.multiSelectState.selectedRecords.has(audioRecord.id) ? '#007AFF' : 'transparent')
+        .border({ width: 2, color: '#007AFF' })
+        .borderRadius(12)
+        .margin({ right: 12 })
+        .onClick(() => this.toggleRecordSelection(audioRecord.id))
+      } else {
         Button() {
           Image($r('app.media.icon'))
             .width(20)
             .height(20)
-            .fillColor('#666666')
+            .fillColor('#007AFF')
         }
         .width(40)
         .height(40)
-        .backgroundColor('#F5F5F5')
+        .backgroundColor('#E3F2FD')
         .borderRadius(20)
-        .onClick(() => this.navigateToGroup())
-      }
-      .width('100%')
-      .height(56)
-      .padding({ left: 16, right: 16 })
-      .backgroundColor('#FFFFFF')
-
-      // 搜索框
-      Row() {
-        Image($r('app.media.icon'))
-          .width(16)
-          .height(16)
-          .fillColor('#999999')
-          .margin({ right: 8 })
-        
-        TextInput({ placeholder: '搜索音频文件', text: this.searchKeyword })
-          .backgroundColor('transparent')
-          .border({ width: 0 })
-          .layoutWeight(1)
-          .onChange((value: string) => {
-            this.searchKeyword = value;
-            this.searchAudio(value);
-          })
-      }
-      .width('100%')
-      .height(40)
-      .padding({ left: 12, right: 12 })
-      .margin({ left: 16, right: 16, top: 8, bottom: 8 })
-      .backgroundColor('#F8F8F8')
-      .borderRadius(20)
-
-      // Tab导航
-      if (!this.isSearchMode) {
-        Row() {
-          Button('全部')
-            .fontSize(14)
-            .fontColor(this.currentTab === TabType.ALL ? '#007AFF' : '#666666')
-            .backgroundColor('transparent')
-            .border({ width: 0 })
-            .onClick(() => this.onTabChange(TabType.ALL))
-          
-          Button('置顶')
-            .fontSize(14)
-            .fontColor(this.currentTab === TabType.RECORD ? '#007AFF' : '#666666')
-            .backgroundColor('transparent')
-            .border({ width: 0 })
-            .margin({ left: 24 })
-            .onClick(() => this.onTabChange(TabType.RECORD))
-          
-          Button('分组')
-            .fontSize(14)
-            .fontColor(this.currentTab === TabType.GROUP ? '#007AFF' : '#666666')
-            .backgroundColor('transparent')
-            .border({ width: 0 })
-            .margin({ left: 24 })
-            .onClick(() => this.onTabChange(TabType.GROUP))
-          
-          Blank()
-        }
-        .width('100%')
-        .height(44)
-        .padding({ left: 16, right: 16 })
-        .backgroundColor('#FFFFFF')
+        .margin({ right: 12 })
+        .onClick(() => this.navigateToAudioDetail(audioRecord))
       }
 
-      // 音频列表
-      if (this.isLoading) {
-        Column() {
-          LoadingProgress()
-            .width(40)
-            .height(40)
-            .color('#007AFF')
-          
-          Text('加载中...')
-            .fontSize(14)
-            .fontColor('#999999')
-            .margin({ top: 8 })
-        }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-      } else {
-        List() {
-          ForEach(this.getCurrentAudioList(), (audioRecord: AudioRecord) => {
-            ListItem() {
-              this.AudioRecordItem(audioRecord)
-            }
-            .swipeAction({ end: this.SwipeActions(audioRecord) })
-          })
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .backgroundColor('#F8F8F8')
-        .divider({
-          strokeWidth: 0.5,
-          color: '#E5E5E5',
-          startMargin: 16,
-          endMargin: 16
-        })
-      }
-
-      // 底部录音按钮
-      Row() {
-        Button() {
-          Image($r('app.media.icon'))
-            .width(24)
-            .height(24)
-            .fillColor('#FFFFFF')
-        }
-        .width(60)
-        .height(60)
-        .backgroundColor('#007AFF')
-        .borderRadius(30)
-        .onClick(() => this.navigateToRecord())
-      }
-      .width('100%')
-      .height(80)
-      .justifyContent(FlexAlign.Center)
-      .backgroundColor('#FFFFFF')
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#F8F8F8')
-  }
-
-  @Builder
-  AudioRecordItem(audioRecord: AudioRecord) {
-    Row() {
-      // 播放按钮
-      Button() {
-        Image($r('app.media.icon'))
-          .width(20)
-          .height(20)
-          .fillColor('#007AFF')
-      }
-      .width(40)
-      .height(40)
-      .backgroundColor('#E3F2FD')
-      .borderRadius(20)
-      .margin({ right: 12 })
-      .onClick(() => this.navigateToAudioDetail(audioRecord))
-
-      // 音频信息
       Column() {
         Row() {
           Text(audioRecord.fileName)
@@ -432,11 +914,25 @@ struct Index {
     .width('100%')
     .padding({ left: 16, right: 16, top: 12, bottom: 12 })
     .backgroundColor('#FFFFFF')
-    .onClick(() => this.navigateToAudioDetail(audioRecord))
+    .onClick(() => {
+      if (this.multiSelectState.isMultiSelectMode) {
+        this.toggleRecordSelection(audioRecord.id);
+      } else {
+        this.navigateToAudioDetail(audioRecord);
+      }
+    })
+    .gesture(
+      LongPressGesture({ repeat: false })
+        .onAction(() => {
+          if (!this.multiSelectState.isMultiSelectMode && this.currentTab === TabType.ALL) {
+            this.enterMultiSelectMode(audioRecord.id);
+          }
+        })
+    )
   }
 
   @Builder
-  SwipeActions(audioRecord: AudioRecord) {
+  SwipeActionsBuilder(audioRecord: AudioRecord) {
     Row() {
       Button(audioRecord.isTop ? '取消置顶' : '置顶')
         .fontSize(14)
@@ -463,31 +959,17 @@ struct Index {
     }
   }
 
-  /**
-   * Sample code for using HUAWEI ID to log in to atomic service.
-   * According to the Atomic Service Review Guide, when a atomic service has an account system,
-   * the option to log in with a HUAWEI ID must be provided.
-   * The following presets the atomic service to use the HUAWEI ID silent login function.
-   * To enable the atomic service to log in successfully using the HUAWEI ID, please refer
-   * to the HarmonyOS HUAWEI ID Access Guide to configure the client ID and fingerprint certificate.
-   */
-  private loginWithHuaweiID() {
-    // Create a login request and set parameters
+  private loginWithHuaweiID(): void {
     const loginRequest = new authentication.HuaweiIDProvider().createLoginWithHuaweiIDRequest();
-    // Whether to forcibly launch the HUAWEI ID login page when the user is not logged in with the HUAWEI ID
     loginRequest.forceLogin = false;
-    // Execute login request
     const controller = new authentication.AuthenticationController();
     controller.executeRequest(loginRequest).then((data: authentication.LoginWithHuaweiIDResponse) => {
       const loginWithHuaweiIDResponse = data;
       const authCode = loginWithHuaweiIDResponse.data?.authorizationCode;
-      // Send authCode to the backend in exchange for unionID, session
-
     }).catch((error: BusinessError) => {
       hilog.error(DOMAIN, 'testTag', 'error: %{public}s', JSON.stringify(error));
       if (error.code === authentication.AuthenticationErrorCode.ACCOUNT_NOT_LOGGED_IN) {
-        // HUAWEI ID is not logged in, it is recommended to jump to the login guide page
-
+        // HUAWEI ID is not logged in
       }
     });
   }

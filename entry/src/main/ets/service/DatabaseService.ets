@@ -66,17 +66,11 @@ export class DatabaseService {
   private async initDefaultData(): Promise<void> {
     if (!this.dataPreferences) return;
 
-    // 初始化分组数据
+    // 初始化分组数据 - 不创建默认分组，让用户自己创建
     const groups = await this.getAllGroups();
     if (groups.length === 0) {
-      const defaultGroup: AudioGroup = {
-        id: 1,
-        groupName: '默认分组',
-        createTime: Date.now(),
-        audioCount: 0
-      };
-      await this.dataPreferences.put(this.GROUPS_KEY, JSON.stringify([defaultGroup]));
-      await this.dataPreferences.put(this.NEXT_GROUP_ID_KEY, 2);
+      await this.dataPreferences.put(this.GROUPS_KEY, JSON.stringify([]));
+      await this.dataPreferences.put(this.NEXT_GROUP_ID_KEY, 1);
     }
 
     // 初始化记录数据
@@ -93,10 +87,36 @@ export class DatabaseService {
    * 获取所有记录
    */
   private async getAllRecords(): Promise<AudioRecord[]> {
-    if (!this.dataPreferences) return [];
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 🔍 getAllRecords() 开始从数据库读取记录`);
     
+    if (!this.dataPreferences) {
+      hilog.warn(DOMAIN, TAG, `[${timestamp}] ⚠️ dataPreferences未初始化，返回空数组`);
+      return [];
+    }
+    
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📞 调用dataPreferences.get()读取记录数据`);
     const recordsStr = await this.dataPreferences.get(this.RECORDS_KEY, '[]') as string;
-    return JSON.parse(recordsStr) as AudioRecord[];
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📊 从存储中获取到的原始数据长度: ${recordsStr.length}字符`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 原始数据内容预览: ${recordsStr.substring(0, 200)}${recordsStr.length > 200 ? '...' : ''}`);
+    
+    try {
+      const records = JSON.parse(recordsStr) as AudioRecord[];
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ JSON解析成功，获取到 ${records.length} 条记录`);
+      
+      if (records.length > 0) {
+        hilog.info(DOMAIN, TAG, `[${timestamp}] 📋 记录详情预览:`);
+        records.slice(0, 2).forEach((record, index) => {
+          hilog.info(DOMAIN, TAG, `[${timestamp}]   记录${index + 1}: ID=${record.id}, 文件名='${record.fileName}', 时长=${record.duration}ms`);
+        });
+      }
+      
+      return records;
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ JSON解析失败: ${JSON.stringify(error)}`);
+      hilog.error(DOMAIN, TAG, `[${timestamp}] 原始数据: ${recordsStr}`);
+      return [];
+    }
   }
 
   /**
@@ -147,7 +167,7 @@ export class DatabaseService {
   private async getNextGroupId(): Promise<number> {
     if (!this.dataPreferences) return 1;
     
-    const nextId = await this.dataPreferences.get(this.NEXT_GROUP_ID_KEY, 2) as number;
+    const nextId = await this.dataPreferences.get(this.NEXT_GROUP_ID_KEY, 1) as number;
     await this.dataPreferences.put(this.NEXT_GROUP_ID_KEY, nextId + 1);
     await this.dataPreferences.flush();
     return nextId;
@@ -159,12 +179,20 @@ export class DatabaseService {
    * 插入音频记录
    */
   public async insertAudioRecord(record: AudioRecordInput): Promise<number> {
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] insertAudioRecord() started, params: ${JSON.stringify(record)}`);
+    
     if (!this.dataPreferences) {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] Database not initialized`);
       throw new Error('Database not initialized');
     }
+    hilog.info(DOMAIN, TAG, `[${timestamp}] Database initialized, starting to get all records`);
 
     const records = await this.getAllRecords();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] Got ${records.length} existing records`);
+    
     const newId = await this.getNextRecordId();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] Generated new record ID: ${newId}`);
     
     const newRecord: AudioRecord = {
       id: newId,
@@ -174,17 +202,32 @@ export class DatabaseService {
       fileSize: record.fileSize,
       createTime: record.createTime,
       isTop: record.isTop,
-      groupId: record.groupId || 1
+      groupId: record.groupId || 0 // 0表示未分组
     };
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 💾 数据库保存 - 创建新记录对象:`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 记录ID: ${newRecord.id}`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 文件名: '${newRecord.fileName}'`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 文件路径: '${newRecord.filePath}'`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 时长: ${newRecord.duration}ms`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 文件大小: ${newRecord.fileSize} bytes`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 创建时间: ${new Date(newRecord.createTime).toLocaleString()}`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 分组ID: ${newRecord.groupId}`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 完整记录对象: ${JSON.stringify(newRecord)}`);
 
     records.push(newRecord);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] Added new record to list, current total: ${records.length}`);
+    
     await this.saveRecords(records);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] Record saved successfully`);
     
     // 更新分组音频数量
     if (newRecord.groupId) {
+      hilog.info(DOMAIN, TAG, `[${timestamp}] Starting to update audio count for group ${newRecord.groupId}`);
       await this.updateGroupAudioCount(newRecord.groupId);
+      hilog.info(DOMAIN, TAG, `[${timestamp}] Group audio count update completed`);
     }
 
+    hilog.info(DOMAIN, TAG, `[${timestamp}] insertAudioRecord() executed successfully, returning ID: ${newId}`);
     return newId;
   }
 
@@ -192,13 +235,30 @@ export class DatabaseService {
    * 查询所有音频记录
    */
   public async queryAllAudioRecords(): Promise<AudioRecord[]> {
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 🔍 queryAllAudioRecords() 开始查询所有音频记录`);
+    
     const records = await this.getAllRecords();
-    return records.sort((a, b) => {
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📊 从数据库获取到 ${records.length} 条音频记录`);
+    
+    if (records.length > 0) {
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 最新的3条记录详情:`);
+      records.slice(0, 3).forEach((record, index) => {
+        hilog.info(DOMAIN, TAG, `[${timestamp}] 记录${index + 1}: ID=${record.id}, 文件名='${record.fileName}', 创建时间=${new Date(record.createTime).toLocaleString()}`);
+      });
+    } else {
+      hilog.warn(DOMAIN, TAG, `[${timestamp}] ⚠️ 数据库中没有找到任何音频记录`);
+    }
+    
+    const sortedRecords = records.sort((a, b) => {
       if (a.isTop !== b.isTop) {
         return b.isTop ? 1 : -1;
       }
       return b.createTime - a.createTime;
     });
+    
+    hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 音频记录排序完成，返回 ${sortedRecords.length} 条记录`);
+    return sortedRecords;
   }
 
   /**
@@ -283,6 +343,107 @@ export class DatabaseService {
     return records.find(r => r.id === id) || null;
   }
 
+  /**
+   * 清理损坏的数据（修复重复记录和错误分组）
+   */
+  public async cleanupCorruptedData(): Promise<void> {
+    if (!this.dataPreferences) {
+      throw new Error('Database not initialized');
+    }
+
+    hilog.info(DOMAIN, TAG, 'Starting data cleanup...');
+    
+    // 首先清理模拟数据
+    await this.cleanupMockData();
+    
+    // 清理重复的音频记录
+    const records = await this.getAllRecords();
+    const uniqueRecords = new Map<string, AudioRecord>();
+    
+    // 使用文件路径作为唯一标识，保留最新的记录
+    records.forEach(record => {
+      const key = record.filePath;
+      if (!uniqueRecords.has(key) || record.createTime > uniqueRecords.get(key)!.createTime) {
+        uniqueRecords.set(key, record);
+      }
+    });
+    
+    const cleanedRecords = Array.from(uniqueRecords.values());
+    hilog.info(DOMAIN, TAG, `Removed ${records.length - cleanedRecords.length} duplicate records`);
+    
+    // 清理无效的分组（只保留有音频记录的分组）
+    const groups = await this.getAllGroups();
+    const validGroupIds = new Set(cleanedRecords.map(r => r.groupId).filter(id => id && id > 0));
+    const cleanedGroups = groups.filter(group => validGroupIds.has(group.id));
+    
+    hilog.info(DOMAIN, TAG, `Removed ${groups.length - cleanedGroups.length} invalid groups`);
+    
+    // 保存清理后的数据
+    await this.saveRecords(cleanedRecords);
+    await this.saveGroups(cleanedGroups);
+    
+    // 重新计算分组音频数量
+    for (const group of cleanedGroups) {
+      await this.updateGroupAudioCount(group.id);
+    }
+    
+    hilog.info(DOMAIN, TAG, 'Data cleanup completed successfully');
+  }
+
+  /**
+   * 清理模拟数据
+   * 删除包含模拟、测试、示例等关键词的音频记录
+   */
+  public async cleanupMockData(): Promise<void> {
+    if (!this.dataPreferences) {
+      throw new Error('Database not initialized');
+    }
+
+    hilog.info(DOMAIN, TAG, 'Starting mock data cleanup...');
+    
+    const records = await this.getAllRecords();
+    const mockKeywords = ['mock', 'test', 'sample', '模拟', '测试', '示例', '演示'];
+    
+    // 过滤掉包含模拟关键词的记录
+    const realRecords = records.filter(record => {
+      const fileName = record.fileName.toLowerCase();
+      const filePath = record.filePath.toLowerCase();
+      
+      // 检查文件名和路径是否包含模拟关键词
+      return !mockKeywords.some(keyword => 
+        fileName.includes(keyword) || filePath.includes(keyword)
+      );
+    });
+    
+    const removedCount = records.length - realRecords.length;
+    if (removedCount > 0) {
+      await this.saveRecords(realRecords);
+      hilog.info(DOMAIN, TAG, `Removed ${removedCount} mock data records`);
+    } else {
+      hilog.info(DOMAIN, TAG, 'No mock data found to clean');
+    }
+  }
+
+  /**
+   * 清理所有数据（用于调试和重置）
+   */
+  public async clearAllData(): Promise<void> {
+    if (!this.dataPreferences) {
+      throw new Error('Database not initialized');
+    }
+
+    // 清空所有记录和分组
+    await this.dataPreferences.put(this.RECORDS_KEY, JSON.stringify([]));
+    await this.dataPreferences.put(this.GROUPS_KEY, JSON.stringify([]));
+    
+    // 重置ID计数器
+    await this.dataPreferences.put(this.NEXT_RECORD_ID_KEY, 1);
+    await this.dataPreferences.put(this.NEXT_GROUP_ID_KEY, 1);
+    
+    await this.dataPreferences.flush();
+    hilog.info(DOMAIN, TAG, 'All data cleared successfully');
+  }
+
   // ==================== 音频分组操作 ====================
 
   /**
@@ -342,16 +503,11 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    // 不允许删除默认分组
-    if (id === 1) {
-      throw new Error('Cannot delete default group');
-    }
-
-    // 将该分组下的音频移到默认分组
+    // 将该分组下的音频移到未分组状态
     const records = await this.getAllRecords();
     records.forEach(record => {
       if (record.groupId === id) {
-        record.groupId = 1;
+        record.groupId = 0; // 0表示未分组
       }
     });
     await this.saveRecords(records);
@@ -363,9 +519,6 @@ export class DatabaseService {
       groups.splice(groupIndex, 1);
       await this.saveGroups(groups);
     }
-
-    // 更新默认分组的音频数量
-    await this.updateGroupAudioCount(1);
   }
 
   /**
@@ -393,10 +546,10 @@ export class DatabaseService {
   }
 
   /**
-   * 从分组移除音频（移到默认分组）
+   * 从分组移除音频（移到未分组状态）
    */
   public async removeAudioFromGroup(audioId: number): Promise<void> {
-    await this.addAudioToGroup(audioId, 1);
+    await this.addAudioToGroup(audioId, 0);
   }
 
   /**

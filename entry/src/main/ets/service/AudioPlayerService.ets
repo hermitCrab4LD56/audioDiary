@@ -93,7 +93,7 @@ export class AudioPlayerService {
       await this.initPlayer();
       
       if (!this.audioPlayer) {
-        throw new Error('播放器初始化失败');
+        throw new Error('Failed to initialize player');
       }
 
       this.audioPlayer.url = `file://${filePath}`;
@@ -105,8 +105,8 @@ export class AudioPlayerService {
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to prepare audio: ${JSON.stringify(error)}`);
-      this.handleError(`准备播放失败: ${JSON.stringify(error)}`);
-      throw new Error(`准备播放失败: ${JSON.stringify(error)}`);
+      this.handleError(`Failed to prepare playback: ${JSON.stringify(error)}`);
+      throw new Error(`Failed to prepare playback: ${JSON.stringify(error)}`);
     }
   }
 
@@ -123,7 +123,7 @@ export class AudioPlayerService {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to set playback speed: ${JSON.stringify(error)}`);
-      throw new Error(`设置播放速度失败: ${JSON.stringify(error)}`);
+      throw new Error(`Failed to set playback speed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -147,7 +147,7 @@ export class AudioPlayerService {
       // 设置错误监听
       this.audioPlayer.on('error', (error: BusinessError<void>) => {
         hilog.error(DOMAIN, 'AudioPlayerService', `Player error: ${JSON.stringify(error)}`);
-        this.handleError(`播放错误: ${error.message}`);
+        this.handleError(`Playback error: ${error.message}`);
       });
 
       // 设置播放完成监听
@@ -172,7 +172,7 @@ export class AudioPlayerService {
 
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to init player: ${JSON.stringify(error)}`);
-      throw new Error(`初始化播放器失败: ${JSON.stringify(error)}`);
+      throw new Error(`Failed to initialize player: ${JSON.stringify(error)}`);
     }
   }
 
@@ -283,7 +283,7 @@ export class AudioPlayerService {
       
       // 检查文件是否存在
       if (!await fileIo.access(filePath)) {
-        throw new Error('音频文件不存在');
+        throw new Error('Audio file does not exist');
       }
 
       // 如果是同一个文件且处于暂停状态，直接恢复播放
@@ -296,7 +296,7 @@ export class AudioPlayerService {
       await this.initPlayer();
       
       if (!this.audioPlayer) {
-        throw new Error('播放器初始化失败');
+        throw new Error('Failed to initialize player');
       }
 
       // 设置音频源
@@ -313,8 +313,8 @@ export class AudioPlayerService {
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to play audio: ${JSON.stringify(error)}`);
-      this.handleError(`播放失败: ${JSON.stringify(error)}`);
-      throw new Error(`播放失败: ${JSON.stringify(error)}`);
+      this.handleError(`Playback failed: ${JSON.stringify(error)}`);
+      throw new Error(`Playback failed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -329,8 +329,8 @@ export class AudioPlayerService {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to pause audio: ${JSON.stringify(error)}`);
-      this.handleError(`暂停失败: ${JSON.stringify(error)}`);
-      throw new Error(`暂停失败: ${JSON.stringify(error)}`);
+      this.handleError(`Pause failed: ${JSON.stringify(error)}`);
+      throw new Error(`Pause failed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -345,8 +345,8 @@ export class AudioPlayerService {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to resume audio: ${JSON.stringify(error)}`);
-      this.handleError(`恢复播放失败: ${JSON.stringify(error)}`);
-      throw new Error(`恢复播放失败: ${JSON.stringify(error)}`);
+      this.handleError(`Resume playback failed: ${JSON.stringify(error)}`);
+      throw new Error(`Resume playback failed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -361,8 +361,8 @@ export class AudioPlayerService {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to stop audio: ${JSON.stringify(error)}`);
-      this.handleError(`停止播放失败: ${JSON.stringify(error)}`);
-      throw new Error(`停止播放失败: ${JSON.stringify(error)}`);
+      this.handleError(`Stop playback failed: ${JSON.stringify(error)}`);
+      throw new Error(`Stop playback failed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -378,8 +378,8 @@ export class AudioPlayerService {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to seek: ${JSON.stringify(error)}`);
-      this.handleError(`跳转失败: ${JSON.stringify(error)}`);
-      throw new Error(`跳转失败: ${JSON.stringify(error)}`);
+      this.handleError(`Seek failed: ${JSON.stringify(error)}`);
+      throw new Error(`Seek failed: ${JSON.stringify(error)}`);
     }
   }
 
@@ -394,7 +394,7 @@ export class AudioPlayerService {
       }
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to set volume: ${JSON.stringify(error)}`);
-      throw new Error(`设置音量失败: ${JSON.stringify(error)}`);
+      throw new Error(`Failed to set volume: ${JSON.stringify(error)}`);
     }
   }
 
@@ -446,7 +446,7 @@ export class AudioPlayerService {
       
     } catch (error) {
       hilog.error(DOMAIN, 'AudioPlayerService', `Failed to release player: ${JSON.stringify(error)}`);
-      throw new Error(`释放播放器失败: ${JSON.stringify(error)}`);
+      throw new Error(`Failed to release player: ${JSON.stringify(error)}`);
     }
   }
 
