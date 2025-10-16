@@ -48,9 +48,18 @@ struct Index {
 
   onPageShow(): void {
     // 🔥 关键修复：每次页面显示时都重新加载数据，确保显示最新的录音记录
-    if (!this.isLoading) {
-      const timestamp = new Date().toISOString();
-      hilog.info(DOMAIN, 'Index', `[${timestamp}] onPageShow: 开始重新加载所有数据`);
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, 'Index', `[${timestamp}] onPageShow: 页面显示，当前isLoading状态: ${this.isLoading}`);
+    
+    if (this.isLoading) {
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 当前正在加载中，延迟500ms后重新加载数据`);
+      setTimeout(() => {
+        const retryTimestamp = new Date().toISOString();
+        hilog.info(DOMAIN, 'Index', `[${retryTimestamp}] 延迟重新加载数据`);
+        this.reloadAllData();
+      }, 500);
+    } else {
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 立即重新加载所有数据`);
       this.reloadAllData();
     }
   }
@@ -112,7 +121,8 @@ struct Index {
       this.isLoading = true;
       
       hilog.info(DOMAIN, 'Index', `[${timestamp}] 📞 调用数据库查询方法`);
-      const records = await DatabaseService.getInstance().queryAllAudioRecords();
+      hilog.info(DOMAIN, 'Index', `[${timestamp}] 🔍 数据库实例检查: ${this.databaseService ? '已初始化' : '未初始化'}`);
+      const records = await this.databaseService.queryAllAudioRecords();
       
       hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 从数据库获取到 ${records.length} 条音频记录`);
       
@@ -127,6 +137,14 @@ struct Index {
       
       this.audioRecords = records;
       hilog.info(DOMAIN, 'Index', `[${timestamp}] ✅ 音频记录已更新到页面状态，当前audioRecords长度: ${this.audioRecords.length}`);
+      
+      // 🔥 关键修复：强制触发UI更新
+      setTimeout(() => {
+        const uiUpdateTimestamp = new Date().toISOString();
+        hilog.info(DOMAIN, 'Index', `[${uiUpdateTimestamp}] 🔄 强制触发UI更新，当前audioRecords长度: ${this.audioRecords.length}`);
+        // 通过重新赋值触发状态更新
+        this.audioRecords = [...this.audioRecords];
+      }, 100);
       
       // 暂时移除收藏功能，后续会删除收藏tab
       this.favoriteRecords = [];
@@ -815,18 +833,11 @@ struct Index {
         .margin({ right: 12 })
         .onClick(() => this.toggleRecordSelection(audioRecord.id))
       } else {
-        Button() {
-          Image($r('app.media.icon'))
-            .width(20)
-            .height(20)
-            .fillColor('#007AFF')
-        }
-        .width(40)
-        .height(40)
-        .backgroundColor('#E3F2FD')
-        .borderRadius(20)
+        // 移除按钮组件，保持布局间距
+        Row()
+        .width(12)
+        .height(12)
         .margin({ right: 12 })
-        .onClick(() => this.navigateToAudioDetail(audioRecord))
       }
 
       Column() {

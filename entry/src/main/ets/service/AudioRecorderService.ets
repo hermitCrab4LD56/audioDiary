@@ -66,8 +66,8 @@ class MockRecorderImpl implements MockRecorder {
     await DevUtils.mockDelay(100);
     this.service.setMockRecorderState("stopped");
     this.service.handleMockStateChange("stopped" as media.AVRecorderState);
-    // 在开发模式下创建模拟音频文件
-    await this.service.createMockAudioFile();
+    // 在开发模式下创建模拟音频文件，使用标准格式
+    await this.service.createMockAudioFile(true);
   }
 
   async release(): Promise<void> {
@@ -386,8 +386,9 @@ export class AudioRecorderService {
   
   /**
    * 创建模拟音频文件
+   * @param useStandardFormat 是否使用标准音频格式（默认为false，使用文本模拟）
    */
-  public async createMockAudioFile(): Promise<void> {
+  public async createMockAudioFile(useStandardFormat: boolean = false): Promise<void> {
     if (!this.currentFilePath || DevConfig.isProdMode()) {
       return;
     }
@@ -396,22 +397,52 @@ export class AudioRecorderService {
       const mockConfig = DevConfig.getMockRecordingConfig();
       const fileSize = DevConfig.generateMockFileSize(this.recordDuration);
       
-      // 创建模拟的音频文件内容
-      const mockContent = this.generateMockAudioContent(fileSize);
-      
       // 确保目录存在
       const dirPath = this.currentFilePath.substring(0, this.currentFilePath.lastIndexOf("/"));
       if (!await fileIo.access(dirPath)) {
         await fileIo.mkdir(dirPath, true);
       }
       
-      // 写入模拟音频文件
-      const file = fileIo.openSync(this.currentFilePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
-      fileIo.writeSync(file.fd, mockContent);
-      fileIo.closeSync(file);
+      if (useStandardFormat) {
+        // 创建标准格式的音频文件（AAC格式）
+        // 这里使用一个预定义的AAC文件头和随机数据来模拟真实的AAC文件
+        const aacHeader = new Uint8Array([
+          0xFF, 0xF1, 0x50, 0x80, 0x00, 0x1F, 0xFC, 0x21, 0x10, 0x04, 0x60, 0x8C, 0x1C
+        ]);
+        
+        // 创建一个足够大的缓冲区
+        const buffer = new ArrayBuffer(fileSize);
+        const dataView = new DataView(buffer);
+        
+        // 写入AAC头部
+        for (let i = 0; i < aacHeader.length; i++) {
+          dataView.setUint8(i, aacHeader[i]);
+        }
+        
+        // 填充剩余部分为随机数据，模拟音频数据
+        for (let i = aacHeader.length; i < fileSize; i++) {
+          dataView.setUint8(i, Math.floor(Math.random() * 256));
+        }
+        
+        // 写入模拟AAC音频文件
+        const file = fileIo.openSync(this.currentFilePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+        fileIo.writeSync(file.fd, buffer);
+        fileIo.closeSync(file);
+        
+        DevUtils.devLog(TAG, `标准格式模拟音频文件已创建：${this.currentFilePath}，大小：${fileSize}字节`);
+      } else {
+        // 创建文本格式的模拟音频文件（原有逻辑）
+        const mockContent = this.generateMockAudioContent(fileSize);
+        
+        // 写入模拟音频文件
+        const file = fileIo.openSync(this.currentFilePath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+        fileIo.writeSync(file.fd, mockContent);
+        fileIo.closeSync(file);
+        
+        DevUtils.devLog(TAG, `文本格式模拟音频文件已创建：${this.currentFilePath}，大小：${fileSize}字节`);
+      }
       
-      DevUtils.devLog(TAG, `模拟音频文件已创建：${this.currentFilePath}，大小：${fileSize}字节`);
-      hilog.info(DOMAIN, TAG, `Mock audio file created: ${this.currentFilePath}, size: ${fileSize} bytes`);
+      hilog.info(DOMAIN, TAG, `Mock audio file created: ${this.currentFilePath}, size: ${fileSize} bytes, format: ${useStandardFormat ? 'standard' : 'text'}`);
     } catch (error) {
       DevUtils.devError(TAG, `创建模拟音频文件失败：${JSON.stringify(error)}`);
       hilog.error(DOMAIN, TAG, `Failed to create mock audio file: ${JSON.stringify(error)}`);

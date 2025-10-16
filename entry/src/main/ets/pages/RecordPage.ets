@@ -27,6 +27,9 @@ struct RecordPage {
   // 🔥 新增：保存停止录音后的结果数据
   private savedRecordResult: RecordResult | null = null;
   
+  // 🔥 新增：页面状态跟踪
+  private isPageDestroyed: boolean = false;
+  
   private audioRecorderService = AudioRecorderService.getInstance();
   private databaseService = DatabaseService.getInstance();
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
@@ -39,6 +42,8 @@ struct RecordPage {
 
   aboutToDisappear(): void {
     hilog.info(DOMAIN, 'RecordPage', 'Page aboutToDisappear');
+    // 🔥 关键修复：设置页面销毁标志
+    this.isPageDestroyed = true;
     this.stopUpdateTimer();
     this.audioRecorderService.release();
   }
@@ -317,9 +322,17 @@ struct RecordPage {
 
       // 创建音频记录对象
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 📝 创建音频记录对象`);
+      
+      // 🔥 关键修复：验证和清理文件路径
+      const cleanFilePath = filePath.replace(/^file:\/\//, ''); // 移除file://前缀
+      const cleanFileName = this.fileName.trim().replace(/[<>:"/\\|?*]/g, '_'); // 清理文件名中的特殊字符
+      
+      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🧹 文件路径清理: 原路径='${filePath}' -> 清理后='${cleanFilePath}'`);
+      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🧹 文件名清理: 原名称='${this.fileName}' -> 清理后='${cleanFileName}'`);
+      
       const audioRecord: AudioRecordInput = {
-        fileName: this.fileName.trim(),
-        filePath: filePath,
+        fileName: cleanFileName,
+        filePath: cleanFilePath,
         duration: duration,
         fileSize: fileSize, // 🔥 使用保存的实际文件大小
         createTime: Date.now(),
@@ -334,6 +347,31 @@ struct RecordPage {
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}]   - 文件大小: ${audioRecord.fileSize}字节`);
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}]   - 创建时间: ${new Date(audioRecord.createTime).toLocaleString()}`);
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}]   - 分组ID: ${audioRecord.groupId}`);
+      
+      // 🔥 关键修复：验证所有必要字段
+      if (!audioRecord.fileName || audioRecord.fileName.trim() === '') {
+        hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] ❌ 文件名为空，无法保存`);
+        this.showToast('文件名不能为空');
+        return;
+      }
+      
+      if (!audioRecord.filePath || audioRecord.filePath.trim() === '') {
+        hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] ❌ 文件路径为空，无法保存`);
+        this.showToast('文件路径无效');
+        return;
+      }
+      
+      if (audioRecord.duration <= 0) {
+        hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] ❌ 录音时长为0，无法保存`);
+        this.showToast('录音时长无效');
+        return;
+      }
+      
+      if (audioRecord.fileSize <= 0) {
+        hilog.warn(DOMAIN, 'RecordPage', `[${timestamp}] ⚠️ 文件大小为0，但继续保存`);
+      }
+      
+      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] ✅ 所有数据验证通过，准备保存到数据库`);
 
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🔄 正在调用数据库保存方法...`);
       
@@ -369,9 +407,18 @@ struct RecordPage {
         hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] ⏰ 准备在1000ms后跳转回主页面`);
         
         setTimeout(() => {
-          hilog.info(DOMAIN, 'RecordPage', `[${new Date().toISOString()}] 🚀 开始跳转回主页面`);
-          hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 执行页面返回`);
-          this.navigateBack();
+          const navigateTimestamp = new Date().toISOString();
+          hilog.info(DOMAIN, 'RecordPage', `[${navigateTimestamp}] 🚀 开始跳转回主页面`);
+          hilog.info(DOMAIN, 'RecordPage', `[${navigateTimestamp}] 使用replaceUrl确保主页面正确显示`);
+          
+          // 🔥 关键修复：使用replaceUrl替代back()，确保主页面能正确触发onPageShow
+          try {
+            router.replaceUrl({ url: 'pages/Index' });
+            hilog.info(DOMAIN, 'RecordPage', `[${navigateTimestamp}] ✅ 使用replaceUrl成功跳转到主页面`);
+          } catch (error) {
+            hilog.error(DOMAIN, 'RecordPage', `[${navigateTimestamp}] ❌ replaceUrl失败，尝试back(): ${JSON.stringify(error)}`);
+            this.navigateBack();
+          }
         }, 1000);
         
         hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] ✅ 已设置延时跳转，页面跳转指令已发出`);
@@ -463,10 +510,15 @@ struct RecordPage {
    * 显示提示信息
    */
   private showToast(message: string): void {
-    promptAction.showToast({
-      message: message,
-      duration: 2000
-    });
+    try {
+      promptAction.showToast({
+        message: message,
+        duration: 2000
+      });
+    } catch (error) {
+      // 🔥 关键修复：如果UI上下文不可用，只记录日志，不抛出错误
+      hilog.warn(DOMAIN, 'RecordPage', `Failed to show toast (UI context not available): ${message}`);
+    }
   }
 
   /**
@@ -480,11 +532,37 @@ struct RecordPage {
     hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] - recordState: ${currentState}`);
     hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] - isShowFileNameDialog: ${this.isShowFileNameDialog}`);
     hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] - fileName: '${this.fileName}'`);
+    hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] - savedRecordResult: ${this.savedRecordResult ? '存在' : '不存在'}`);
     
+    // 🔥 关键修复：检查是否有未保存的录音数据
+    if (this.savedRecordResult && this.fileName.trim()) {
+      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🚨 检测到未保存的录音数据，自动保存`);
+      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 文件名: '${this.fileName}', 文件路径: '${this.savedRecordResult.filePath}'`);
+      
+      // 自动保存录音
+      this.saveRecording().then(() => {
+        hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] ✅ 自动保存完成，准备返回主页面`);
+        this.performNavigation();
+      }).catch((error: Error) => {
+        hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] ❌ 自动保存失败: ${JSON.stringify(error)}`);
+        this.performNavigation(); // 即使保存失败也要返回
+      });
+    } else {
+      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 没有未保存的录音数据，直接返回`);
+      this.performNavigation();
+    }
+  }
+
+  private performNavigation(): void {
+    const timestamp = new Date().toISOString();
     try {
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] Preparing to call router.back()`);
-      const routerStatus = 'available';
-      hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] router object status: ${routerStatus}`);
+      
+      // 🔥 关键修复：检查页面是否仍然可用
+      if (this.checkPageDestroyed()) {
+        hilog.warn(DOMAIN, 'RecordPage', `[${timestamp}] Page is destroyed, skipping navigation`);
+        return;
+      }
       
       router.back();
       
@@ -498,9 +576,14 @@ struct RecordPage {
       }, 2000);
       
     } catch (error) {
-      hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] navigateBack() execution failed:`);
-      hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] 错误信息: ${error instanceof Error ? error.message : String(error)}`);
-      hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] 错误堆栈: ${error instanceof Error ? error.stack : 'No stack trace'}`);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      hilog.warn(DOMAIN, 'RecordPage', `[${timestamp}] navigateBack() execution failed: ${errorMessage}`);
+      
+      // 🔥 关键修复：如果UI上下文不可用，不尝试其他导航方法
+      if (errorMessage.includes('UI execution context not found') || errorMessage.includes('Parameter error')) {
+        hilog.warn(DOMAIN, 'RecordPage', `[${timestamp}] UI context not available, navigation skipped`);
+        return;
+      }
       
       // 如果router.back()失败，尝试其他跳转方式
       hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] Trying alternative navigation method`);
@@ -508,9 +591,16 @@ struct RecordPage {
         router.replaceUrl({ url: 'pages/Index' });
         hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] Successfully navigated using router.replaceUrl()`);
       } catch (replaceError) {
-        hilog.error(DOMAIN, 'RecordPage', `[${timestamp}] Alternative navigation method also failed: ${replaceError instanceof Error ? replaceError.message : String(replaceError)}`);
+        hilog.warn(DOMAIN, 'RecordPage', `[${timestamp}] Alternative navigation method also failed: ${replaceError instanceof Error ? replaceError.message : String(replaceError)}`);
       }
     }
+  }
+
+  /**
+   * 检查页面是否已销毁
+   */
+  private checkPageDestroyed(): boolean {
+    return this.isPageDestroyed;
   }
 
   /**
@@ -573,11 +663,11 @@ struct RecordPage {
       Row() {
         Button() {
           Image($r('app.media.back_button'))
-            .width(140)
+            .width(120)
             .height(70)
             .fillColor('#333333')
         }
-        .width(140)
+        .width(120)
         .height(70)
         .backgroundColor('transparent')
         .onClick(() => this.navigateBack())
@@ -607,9 +697,9 @@ struct RecordPage {
           .fontColor('#333333')
           .margin({ top: 40, bottom: 20 })
         
-        Text(this.recordState === RecordState.RECORDING ? 'Recording...' : 
-             this.recordState === RecordState.PAUSED ? 'Recording Paused' : 
-             this.recordState === RecordState.STOPPED ? 'Recording Completed' : 'Ready to Record')
+        Text(this.recordState === RecordState.RECORDING ? '录音中' :
+             this.recordState === RecordState.PAUSED ? '录音暂停' :
+             this.recordState === RecordState.STOPPED ? '录音结束' : '准备录音')
           .fontSize(16)
           .fontColor('#666666')
       }
@@ -619,10 +709,10 @@ struct RecordPage {
 
       // 波形显示区域
       Column() {
-        Text('音频波形')
-          .fontSize(14)
-          .fontColor('#999999')
-          .margin({ bottom: 16 })
+        // Text('音频波形')
+        //   .fontSize(14)
+        //   .fontColor('#999999')
+        //   .margin({ bottom: 16 })
         
         // 波形容器
         Row() {
@@ -769,25 +859,44 @@ struct RecordPage {
   @Builder
   FileNameDialog() {
     Column() {
-      Text('保存录音')
-        .fontSize(20)
+      // 🔥 关键修复：添加更明显的标题和说明
+      Text('🎤 录音完成')
+        .fontSize(24)
         .fontWeight(FontWeight.Bold)
+        .fontColor('#007AFF')
+        .margin({ bottom: 8 })
+      
+      Text('请为您的录音输入文件名')
+        .fontSize(16)
+        .fontColor('#666666')
         .margin({ bottom: 20 })
 
       TextInput({ placeholder: '请输入文件名', text: this.fileName })
         .width('100%')
-        .height(40)
+        .height(44)
+        .backgroundColor('#F8F8F8')
+        .borderRadius(8)
+        .padding({ left: 12, right: 12 })
         .margin({ bottom: 20 })
         .onChange((value: string) => {
           this.fileName = value;
         })
 
+      // 🔥 关键修复：添加提示信息
+      if (!this.fileName.trim()) {
+        Text('💡 提示：如果不输入文件名，将使用默认名称')
+          .fontSize(12)
+          .fontColor('#FF9500')
+          .margin({ bottom: 20 })
+      }
+
       Row() {
         Button('取消')
           .width('45%')
-          .height(40)
+          .height(44)
           .backgroundColor('#E0E0E0')
           .fontColor('#333333')
+          .borderRadius(8)
           .onClick(() => {
             const timestamp = new Date().toISOString();
             hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🚫 用户点击取消按钮`);
@@ -796,34 +905,37 @@ struct RecordPage {
             hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 对话框已关闭，文件名已清空`);
           })
 
-        Button('保存')
+        Button('保存录音')
           .width('45%')
-          .height(40)
+          .height(44)
           .backgroundColor('#007AFF')
           .fontColor('#FFFFFF')
+          .borderRadius(8)
+          .fontWeight(FontWeight.Medium)
           .onClick(async () => {
             const timestamp = new Date().toISOString();
             hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 💾 用户点击保存按钮`);
             hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 当前文件名: '${this.fileName}'`);
             hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 文件名trim后: '${this.fileName.trim()}'`);
             
-            if (this.fileName.trim()) {
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 文件名有效，开始调用 saveRecording()`);
-              await this.saveRecording();
-            } else {
-              hilog.warn(DOMAIN, 'RecordPage', `[${timestamp}] 文件名为空，显示提示信息`);
-              this.showToast('请输入文件名');
+            // 🔥 关键修复：如果文件名为空，使用默认名称
+            if (!this.fileName.trim()) {
+              this.fileName = this.generateDefaultFileName();
+              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 使用默认文件名: '${this.fileName}'`);
             }
+            
+            hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 文件名有效，开始调用 saveRecording()`);
+            await this.saveRecording();
           })
       }
       .width('100%')
       .justifyContent(FlexAlign.SpaceBetween)
     }
-    .width('80%')
-    .padding(20)
+    .width('85%')
+    .padding(24)
     .backgroundColor('#FFFFFF')
-    .borderRadius(10)
-    .shadow({ radius: 10, color: '#00000020' })
+    .borderRadius(16)
+    .shadow({ radius: 16, color: '#00000030' })
   }
   
   @Builder

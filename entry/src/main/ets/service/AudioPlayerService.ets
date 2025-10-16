@@ -2,8 +2,132 @@ import { media } from '@kit.MediaKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PlayState, AudioConfig } from '../model/DataModel';
 import { fileIo } from '@kit.CoreFileKit';
+import { DevConfig, DevUtils } from '../config/DevConfig';
 
 const DOMAIN = 0x0000;
+
+/**
+ * 模拟播放器接口
+ */
+interface MockPlayer {
+  prepare(): Promise<void>;
+  play(): Promise<void>;
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  stop(): Promise<void>;
+  release(): Promise<void>;
+  seekTo(position: number): Promise<void>;
+  setVolume(volume: number): Promise<void>;
+  setPlaybackSpeed(speed: number): Promise<void>;
+  on(event: string, callback: (data?: Object) => void): void;
+}
+
+/**
+ * 模拟播放器实现类
+ */
+class MockPlayerImpl implements MockPlayer {
+  private service: AudioPlayerService;
+  private currentPosition: number = 0;
+  private duration: number = 0;
+  private isPlaying: boolean = false;
+  private volume: number = 1.0;
+  private playbackSpeed: number = 1.0;
+  private positionTimer: number | null = null;
+
+  constructor(service: AudioPlayerService) {
+    this.service = service;
+  }
+
+  async prepare(): Promise<void> {
+    DevUtils.devLog('MockPlayer', '模拟播放器：准备播放');
+    await DevUtils.mockDelay(100);
+    this.duration = 30000; // 30秒模拟音频
+    this.currentPosition = 0;
+  }
+
+  async play(): Promise<void> {
+    DevUtils.devLog('MockPlayer', '模拟播放器：开始播放');
+    await DevUtils.mockDelay(50);
+    this.isPlaying = true;
+    this.startPositionTimer();
+    this.service.handleMockStateChange(PlayState.PLAYING);
+  }
+
+  async pause(): Promise<void> {
+    DevUtils.devLog('MockPlayer', '模拟播放器：暂停播放');
+    await DevUtils.mockDelay(50);
+    this.isPlaying = false;
+    this.stopPositionTimer();
+    this.service.handleMockStateChange(PlayState.PAUSED);
+  }
+
+  async resume(): Promise<void> {
+    DevUtils.devLog('MockPlayer', '模拟播放器：恢复播放');
+    await DevUtils.mockDelay(50);
+    this.isPlaying = true;
+    this.startPositionTimer();
+    this.service.handleMockStateChange(PlayState.PLAYING);
+  }
+
+  async stop(): Promise<void> {
+    DevUtils.devLog('MockPlayer', '模拟播放器：停止播放');
+    await DevUtils.mockDelay(50);
+    this.isPlaying = false;
+    this.currentPosition = 0;
+    this.stopPositionTimer();
+    this.service.handleMockStateChange(PlayState.STOPPED);
+  }
+
+  async release(): Promise<void> {
+    DevUtils.devLog('MockPlayer', '模拟播放器：释放资源');
+    this.stopPositionTimer();
+  }
+
+  async seekTo(position: number): Promise<void> {
+    DevUtils.devLog('MockPlayer', `模拟播放器：跳转到位置 ${position}ms`);
+    await DevUtils.mockDelay(50);
+    this.currentPosition = Math.max(0, Math.min(position, this.duration));
+    this.service.handleMockPositionUpdate(this.currentPosition);
+  }
+
+  async setVolume(volume: number): Promise<void> {
+    DevUtils.devLog('MockPlayer', `模拟播放器：设置音量 ${volume}`);
+    this.volume = volume;
+  }
+
+  async setPlaybackSpeed(speed: number): Promise<void> {
+    DevUtils.devLog('MockPlayer', `模拟播放器：设置播放速度 ${speed}`);
+    this.playbackSpeed = speed;
+  }
+
+  on(event: string, callback: (data?: Object) => void): void {
+    DevUtils.devLog('MockPlayer', `模拟播放器：注册事件监听器 ${event}`);
+  }
+
+  private startPositionTimer(): void {
+    this.stopPositionTimer();
+    this.positionTimer = setInterval(() => {
+      if (this.isPlaying) {
+        this.currentPosition += 100; // 每100ms增加100ms位置
+        if (this.currentPosition >= this.duration) {
+          this.currentPosition = this.duration;
+          this.isPlaying = false;
+          this.stopPositionTimer();
+          this.service.handleMockCompletion();
+        } else {
+          this.service.handleMockPositionUpdate(this.currentPosition);
+        }
+      }
+    }, 100);
+  }
+
+  private stopPositionTimer(): void {
+    if (this.positionTimer) {
+      clearInterval(this.positionTimer);
+      this.positionTimer = null;
+    }
+  }
+}
 
 /**
  * 音频播放服务类
@@ -21,6 +145,8 @@ export class AudioPlayerService {
   private errorCallback?: (error: string) => void;
   private completionCallback?: () => void;
   private progressTimer: number | null = null;
+  private isMockPlayer: boolean = false;
+  private mockPlayer: MockPlayerImpl | null = null;
 
   private constructor() {}
 
@@ -132,6 +258,16 @@ export class AudioPlayerService {
    */
   private async initPlayer(): Promise<void> {
     try {
+      // 开发模式下创建模拟播放器
+      if (DevConfig.isDevMode()) {
+        DevUtils.devLog('AudioPlayerService', '开发模式：创建模拟播放器');
+        hilog.info(DOMAIN, 'AudioPlayerService', 'Dev mode: Creating mock player');
+        this.isMockPlayer = true;
+        this.mockPlayer = new MockPlayerImpl(this);
+        hilog.info(DOMAIN, 'AudioPlayerService', 'Mock player created successfully');
+        return;
+      }
+      
       if (this.audioPlayer) {
         await this.releasePlayer();
       }
@@ -250,6 +386,33 @@ export class AudioPlayerService {
   }
 
   /**
+   * 处理模拟播放器状态变化
+   */
+  public handleMockStateChange(state: PlayState): void {
+    this.playState = state;
+    if (this.stateChangeCallback) {
+      this.stateChangeCallback(state);
+    }
+  }
+
+  /**
+   * 处理模拟播放器位置更新
+   */
+  public handleMockPositionUpdate(position: number): void {
+    this.currentPosition = position;
+    if (this.progressCallback) {
+      this.progressCallback(position, this.duration);
+    }
+  }
+
+  /**
+   * 处理模拟播放器播放完成
+   */
+  public handleMockCompletion(): void {
+    this.handleCompletion();
+  }
+
+  /**
    * 开始进度定时器
    */
   private startProgressTimer(): void {
@@ -280,6 +443,13 @@ export class AudioPlayerService {
   public async play(filePath: string): Promise<void> {
     try {
       hilog.info(DOMAIN, 'AudioPlayerService', `Starting to play: ${filePath}`);
+      
+      // 开发模式下使用模拟播放器
+      if (DevConfig.isDevMode()) {
+        DevUtils.devLog('AudioPlayerService', `模拟播放：${filePath}`);
+        await this.playWithMockPlayer(filePath);
+        return;
+      }
       
       // 检查文件是否存在
       if (!await fileIo.access(filePath)) {
@@ -319,10 +489,42 @@ export class AudioPlayerService {
   }
 
   /**
+   * 模拟播放器播放方法
+   */
+  private async playWithMockPlayer(filePath: string): Promise<void> {
+    try {
+      if (!this.mockPlayer) {
+        await this.initPlayer();
+      }
+      
+      if (!this.mockPlayer) {
+        throw new Error('Failed to initialize mock player');
+      }
+      
+      this.currentFilePath = filePath;
+      this.duration = 30000; // 30秒模拟音频
+      
+      await this.mockPlayer.prepare();
+      await this.mockPlayer.play();
+      
+      DevUtils.devLog('AudioPlayerService', '模拟播放开始');
+    } catch (error) {
+      hilog.error(DOMAIN, 'AudioPlayerService', `Mock playback failed: ${JSON.stringify(error)}`);
+      this.handleError(`Mock playback failed: ${JSON.stringify(error)}`);
+      throw new Error(`Mock playback failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
    * 暂停播放
    */
   public async pause(): Promise<void> {
     try {
+      if (this.isMockPlayer && this.mockPlayer) {
+        await this.mockPlayer.pause();
+        return;
+      }
+      
       if (this.audioPlayer && this.playState === PlayState.PLAYING) {
         await this.audioPlayer.pause();
         hilog.info(DOMAIN, 'AudioPlayerService', 'Audio playback paused');
@@ -339,6 +541,11 @@ export class AudioPlayerService {
    */
   public async resume(): Promise<void> {
     try {
+      if (this.isMockPlayer && this.mockPlayer) {
+        await this.mockPlayer.resume();
+        return;
+      }
+      
       if (this.audioPlayer && this.playState === PlayState.PAUSED) {
         await this.audioPlayer.play();
         hilog.info(DOMAIN, 'AudioPlayerService', 'Audio playback resumed');
@@ -355,6 +562,11 @@ export class AudioPlayerService {
    */
   public async stop(): Promise<void> {
     try {
+      if (this.isMockPlayer && this.mockPlayer) {
+        await this.mockPlayer.stop();
+        return;
+      }
+      
       if (this.audioPlayer) {
         await this.audioPlayer.stop();
         hilog.info(DOMAIN, 'AudioPlayerService', 'Audio playback stopped');

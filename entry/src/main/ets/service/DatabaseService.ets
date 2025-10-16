@@ -50,13 +50,30 @@ export class DatabaseService {
    * 初始化数据库
    */
   public async initDatabase(context: Context | common.UIAbilityContext): Promise<void> {
+    const timestamp = new Date().toISOString();
     try {
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 🔄 开始初始化数据库`);
+      
       this.dataPreferences = await preferences.getPreferences(context, this.PREF_NAME);
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ Preferences对象创建成功`);
+      
+      // 🔥 关键修复：验证preferences对象是否有效
+      if (!this.dataPreferences) {
+        throw new Error('Preferences对象创建失败，返回null');
+      }
+      
       await this.initDefaultData();
-      hilog.info(DOMAIN, TAG, 'Database initialized successfully');
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 默认数据初始化完成`);
+      
+      // 🔥 关键修复：验证数据库是否真的可用
+      const testRecords = await this.getAllRecords();
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 数据库验证成功，当前记录数: ${testRecords.length}`);
+      
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 🎉 数据库初始化完全成功`);
     } catch (error) {
-      hilog.error(DOMAIN, TAG, `Failed to initialize database: ${JSON.stringify(error)}`);
-      throw new Error(`Failed to initialize database: ${JSON.stringify(error)}`);
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ 数据库初始化失败: ${JSON.stringify(error)}`);
+      this.dataPreferences = null; // 确保清理状态
+      throw new Error(`数据库初始化失败: ${JSON.stringify(error)}`);
     }
   }
 
@@ -133,10 +150,36 @@ export class DatabaseService {
    * 保存记录
    */
   private async saveRecords(records: AudioRecord[]): Promise<void> {
-    if (!this.dataPreferences) return;
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 💾 saveRecords() started, saving ${records.length} records`);
     
-    await this.dataPreferences.put(this.RECORDS_KEY, JSON.stringify(records));
-    await this.dataPreferences.flush();
+    if (!this.dataPreferences) {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ Database not initialized`);
+      return;
+    }
+    
+    try {
+      const recordsJson = JSON.stringify(records);
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 JSON data length: ${recordsJson.length} characters`);
+      
+      await this.dataPreferences.put(this.RECORDS_KEY, recordsJson);
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ Records saved to preferences`);
+      
+      await this.dataPreferences.flush();
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ Data flushed to storage`);
+      
+      // 🔥 关键修复：验证数据是否真的被保存
+      const verifyJson = await this.dataPreferences.get(this.RECORDS_KEY, '');
+      if (verifyJson === recordsJson) {
+        hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 数据保存验证成功`);
+      } else {
+        hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ 数据保存验证失败`);
+      }
+      
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ Failed to save records: ${JSON.stringify(error)}`);
+      throw new Error(`Failed to save records: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /**
@@ -182,9 +225,19 @@ export class DatabaseService {
     const timestamp = new Date().toISOString();
     hilog.info(DOMAIN, TAG, `[${timestamp}] insertAudioRecord() started, params: ${JSON.stringify(record)}`);
     
+    // 🔥 关键修复：验证数据库连接状态
     if (!this.dataPreferences) {
-      hilog.error(DOMAIN, TAG, `[${timestamp}] Database not initialized`);
-      throw new Error('Database not initialized');
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ Database not initialized - dataPreferences is null`);
+      throw new Error('Database not initialized - dataPreferences is null');
+    }
+    
+    // 🔥 关键修复：测试数据库连接是否可用
+    try {
+      await this.dataPreferences.flush();
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 数据库连接验证成功`);
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ 数据库连接验证失败: ${JSON.stringify(error)}`);
+      throw new Error(`数据库连接不可用: ${JSON.stringify(error)}`);
     }
     hilog.info(DOMAIN, TAG, `[${timestamp}] Database initialized, starting to get all records`);
 
@@ -212,6 +265,16 @@ export class DatabaseService {
     await this.saveRecords(records);
     hilog.info(DOMAIN, TAG, `[${timestamp}] Record saved successfully`);
     
+    // 🔥 关键修复：立即验证数据是否真的被保存
+    const verifyRecords = await this.getAllRecords();
+    const savedRecord = verifyRecords.find(r => r.id === newId);
+    if (savedRecord) {
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 数据保存验证成功，找到新保存的记录: ID=${savedRecord.id}, 文件名='${savedRecord.fileName}'`);
+    } else {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ 数据保存验证失败，未找到新保存的记录！`);
+      throw new Error('数据保存验证失败');
+    }
+    
     // 更新分组音频数量
     if (newRecord.groupId) {
       hilog.info(DOMAIN, TAG, `[${timestamp}] Starting to update audio count for group ${newRecord.groupId}`);
@@ -229,6 +292,12 @@ export class DatabaseService {
   public async queryAllAudioRecords(): Promise<AudioRecord[]> {
     const timestamp = new Date().toISOString();
     hilog.info(DOMAIN, TAG, `[${timestamp}] 🔍 queryAllAudioRecords() 开始查询所有音频记录`);
+    
+    // 🔥 关键修复：强制刷新数据存储，确保获取最新数据
+    if (this.dataPreferences) {
+      await this.dataPreferences.flush();
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 💾 强制刷新数据存储完成`);
+    }
     
     const records = await this.getAllRecords();
     hilog.info(DOMAIN, TAG, `[${timestamp}] 📊 从数据库获取到 ${records.length} 条音频记录`);
@@ -291,22 +360,47 @@ export class DatabaseService {
    * 删除音频记录
    */
   public async deleteAudioRecord(id: number): Promise<void> {
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 🗑️ deleteAudioRecord() started, ID: ${id}`);
+    
     if (!this.dataPreferences) {
+      hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ Database not initialized`);
       throw new Error('Database not initialized');
     }
 
     const records = await this.getAllRecords();
+    hilog.info(DOMAIN, TAG, `[${timestamp}] 📊 当前数据库中有 ${records.length} 条记录`);
+    
     const recordIndex = records.findIndex(r => r.id === id);
     
     if (recordIndex !== -1) {
       const record = records[recordIndex];
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 找到要删除的记录: ID=${record.id}, 文件名='${record.fileName}'`);
+      
       records.splice(recordIndex, 1);
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 🗂️ 从列表中移除记录，剩余 ${records.length} 条记录`);
+      
       await this.saveRecords(records);
+      hilog.info(DOMAIN, TAG, `[${timestamp}] 💾 记录已保存到数据库`);
+      
+      // 🔥 关键修复：立即验证删除是否成功
+      const verifyRecords = await this.getAllRecords();
+      const deletedRecord = verifyRecords.find(r => r.id === id);
+      if (!deletedRecord) {
+        hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ 删除验证成功，记录已不存在`);
+      } else {
+        hilog.error(DOMAIN, TAG, `[${timestamp}] ❌ 删除验证失败，记录仍然存在`);
+      }
       
       // 更新分组音频数量
       if (record.groupId) {
+        hilog.info(DOMAIN, TAG, `[${timestamp}] 📊 更新分组 ${record.groupId} 的音频数量`);
         await this.updateGroupAudioCount(record.groupId);
       }
+      
+      hilog.info(DOMAIN, TAG, `[${timestamp}] ✅ deleteAudioRecord() completed successfully`);
+    } else {
+      hilog.warn(DOMAIN, TAG, `[${timestamp}] ⚠️ 未找到ID为 ${id} 的记录`);
     }
   }
 

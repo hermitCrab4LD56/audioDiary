@@ -10,6 +10,12 @@ import { promptAction } from '@kit.ArkUI';
 
 const DOMAIN = 0x0000;
 
+// 定义对话框偏移量接口
+interface DialogOffset {
+  dx: number;
+  dy: number;
+}
+
 @Entry
 @Component
 struct AudioDetailPage {
@@ -186,6 +192,57 @@ struct AudioDetailPage {
   }
 
   /**
+   * 主播放按钮点击处理 - 类似录音页面的功能
+   */
+  private async handleMainPlayButton(): Promise<void> {
+    try {
+      switch (this.playState) {
+        case PlayState.IDLE:
+          // 开始播放
+          if (this.audioRecord?.filePath) {
+            await this.audioPlayerService.play(this.audioRecord.filePath);
+            this.startUpdateTimer();
+          }
+          break;
+        case PlayState.PLAYING:
+          // 暂停播放
+          await this.audioPlayerService.pause();
+          this.stopUpdateTimer();
+          break;
+        case PlayState.PAUSED:
+          // 恢复播放
+          await this.audioPlayerService.resume();
+          this.startUpdateTimer();
+          break;
+        case PlayState.STOPPED:
+          // 重新开始播放
+          if (this.audioRecord?.filePath) {
+            await this.audioPlayerService.play(this.audioRecord.filePath);
+            this.startUpdateTimer();
+          }
+          break;
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, 'AudioDetailPage', `Failed to handle main play button: ${JSON.stringify(error)}`);
+      this.showToast('Playback control failed');
+    }
+  }
+
+  /**
+   * 获取播放按钮颜色 - 类似录音页面的颜色逻辑
+   */
+  private getPlayButtonColor(): string {
+    switch (this.playState) {
+      case PlayState.PLAYING:
+        return '#FF3B30'; // 播放中：红色
+      case PlayState.PAUSED:
+        return '#FF9500'; // 暂停：橙色
+      default:
+        return '#007AFF'; // 其他状态：蓝色
+    }
+  }
+
+  /**
    * 跳转到指定位置
    */
   private async seekTo(position: number): Promise<void> {
@@ -227,16 +284,44 @@ struct AudioDetailPage {
    * 显示删除确认对话框
    */
   private showDeleteConfirmDialog(): void {
-    this.deleteDialogController = new CustomDialogController({
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🔔 showDeleteConfirmDialog() called`);
+    
+    if (!this.audioRecord) {
+      hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ Cannot show delete dialog: audioRecord is null`);
+      this.showToast('音频记录不存在');
+      return;
+    }
+    
+    hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 📝 准备删除的录音: '${this.audioRecord.fileName}'`);
+    
+    // 🔥 关键修复：使用正确的对话框创建方式（参照GroupPage的实现）
+    const dialogController: CustomDialogController = new CustomDialogController({
       builder: DeleteConfirmDialog({
         fileName: this.audioRecord?.fileName || '',
-        onConfirm: () => this.deleteAudioRecord(),
-        onCancel: () => this.closeDeleteDialog()
+        onConfirm: () => {
+          hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 用户确认删除`);
+          this.deleteAudioRecord();
+        },
+        onCancel: () => {
+          hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ 用户取消删除`);
+          this.closeDeleteDialog();
+        }
       }),
-      autoCancel: false,
-      alignment: DialogAlignment.Center
+      autoCancel: true,
+      alignment: DialogAlignment.Center,
+      offset: { dx: 0, dy: 0 } as DialogOffset
     });
-    this.deleteDialogController.open();
+    
+    this.deleteDialogController = dialogController;
+    
+    try {
+      dialogController.open();
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 删除确认对话框已显示`);
+    } catch (error) {
+      hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ 显示删除对话框失败: ${JSON.stringify(error)}`);
+      this.showToast('显示对话框失败');
+    }
   }
 
   /**
@@ -277,35 +362,58 @@ struct AudioDetailPage {
    * 删除音频记录
    */
   private async deleteAudioRecord(): Promise<void> {
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🗑️ deleteAudioRecord() started`);
+    
     try {
-      if (!this.audioRecord) return;
+      if (!this.audioRecord) {
+        hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ audioRecord is null`);
+        this.showToast('音频记录不存在');
+        return;
+      }
+      
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 📊 准备删除录音: ID=${this.audioRecord.id}, 文件名='${this.audioRecord.fileName}'`);
       
       // 停止播放
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ⏹️ 停止播放`);
       await this.stopPlayback();
       
       // 删除文件
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 📁 删除文件: ${this.audioRecord.filePath}`);
       try {
         if (await fileIo.access(this.audioRecord.filePath)) {
           await fileIo.unlink(this.audioRecord.filePath);
+          hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 文件删除成功`);
+        } else {
+          hilog.warn(DOMAIN, 'AudioDetailPage', `[${timestamp}] ⚠️ 文件不存在，跳过删除`);
         }
       } catch (fileError) {
-        hilog.warn(DOMAIN, 'AudioDetailPage', `Failed to delete file: ${JSON.stringify(fileError)}`);
+        hilog.warn(DOMAIN, 'AudioDetailPage', `[${timestamp}] ⚠️ 文件删除失败: ${JSON.stringify(fileError)}`);
       }
       
       // 从数据库删除记录
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🗄️ 从数据库删除记录: ID=${this.audioRecord.id}`);
       await this.databaseService.deleteAudioRecord(this.audioRecord.id);
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 数据库记录删除成功`);
       
-      this.showToast('Deleted successfully');
+      // 验证删除是否成功
+      const verifyRecord = await this.databaseService.getAudioRecordById(this.audioRecord.id);
+      if (!verifyRecord) {
+        hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 删除验证成功，记录已不存在`);
+      } else {
+        hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ 删除验证失败，记录仍然存在`);
+      }
+      
+      this.showToast('删除成功');
       this.closeDeleteDialog();
       
-      // 返回上一页
-      setTimeout(() => {
-        this.navigateBack();
-      }, 1000);
+      // 立即返回上一页
+      hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🏠 准备返回主页面`);
+      this.navigateBack();
       
     } catch (error) {
-      hilog.error(DOMAIN, 'AudioDetailPage', `Failed to delete audio record: ${JSON.stringify(error)}`);
-      this.showToast('Delete failed');
+      hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ 删除失败: ${JSON.stringify(error)}`);
+      this.showToast('删除失败，请重试');
     }
   }
 
@@ -389,9 +497,17 @@ struct AudioDetailPage {
    * 关闭删除对话框
    */
   private closeDeleteDialog(): void {
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🔒 closeDeleteDialog() called`);
+    
     if (this.deleteDialogController) {
-      this.deleteDialogController.close();
-      this.deleteDialogController = null;
+      try {
+        this.deleteDialogController.close();
+        this.deleteDialogController = null;
+        hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 删除对话框已关闭`);
+      } catch (error) {
+        hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ 关闭删除对话框失败: ${JSON.stringify(error)}`);
+      }
     }
   }
 
@@ -489,17 +605,40 @@ struct AudioDetailPage {
    * 显示提示信息
    */
   private showToast(message: string): void {
-    promptAction.showToast({
-      message: message,
-      duration: 2000
-    });
+    try {
+      promptAction.showToast({
+        message: message,
+        duration: 2000
+      });
+    } catch (error) {
+      // 如果UI上下文不可用，只记录日志，不抛出异常
+      hilog.warn(DOMAIN, 'AudioDetailPage', `Failed to show toast (UI context not available): ${message}`);
+    }
   }
 
   /**
    * 返回上一页
    */
   private navigateBack(): void {
-    router.back();
+    const timestamp = new Date().toISOString();
+    hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🏠 navigateBack() called`);
+    
+    // 使用setTimeout确保在当前UI事件处理完成后再执行导航
+    setTimeout(() => {
+      try {
+        router.back();
+        hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 页面返回成功`);
+      } catch (error) {
+        hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ 页面返回失败: ${JSON.stringify(error)}`);
+        // 尝试使用replaceUrl作为备选方案
+        try {
+          router.replaceUrl({ url: 'pages/Index' });
+          hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] ✅ 使用replaceUrl返回主页面成功`);
+        } catch (replaceError) {
+          hilog.error(DOMAIN, 'AudioDetailPage', `[${timestamp}] ❌ replaceUrl也失败: ${JSON.stringify(replaceError)}`);
+        }
+      }
+    }, 100);
   }
 
   build() {
@@ -556,13 +695,13 @@ struct AudioDetailPage {
           // 顶部导航栏
           Row() {
             Button() {
-              Image($r('app.media.icon'))
-                .width(20)
-                .height(20)
+              Image($r('app.media.back_button'))
+                .width(120)
+                .height(70)
                 .fillColor('#333333')
             }
-            .width(40)
-            .height(40)
+            .width(120)
+            .height(70)
             .backgroundColor('transparent')
             .onClick(() => this.navigateBack())
             
@@ -572,19 +711,6 @@ struct AudioDetailPage {
               .fontColor('#333333')
               .layoutWeight(1)
               .textAlign(TextAlign.Center)
-            
-            Button() {
-              Image($r('app.media.icon'))
-                .width(20)
-                .height(20)
-                .fillColor('#333333')
-            }
-            .width(40)
-            .height(40)
-            .backgroundColor('transparent')
-            .onClick(() => {
-              // 显示更多操作菜单
-            })
           }
           .width('100%')
           .height(56)
@@ -593,20 +719,11 @@ struct AudioDetailPage {
 
           // 音频信息卡片
           Column() {
-            // 音频图标
-            Column() {
-              Image($r('app.media.icon'))
-                .width(60)
-                .height(60)
-                .fillColor('#007AFF')
-            }
-            .width(120)
-            .height(120)
-            .backgroundColor('#F0F8FF')
-            .borderRadius(60)
-            .justifyContent(FlexAlign.Center)
-            .alignItems(HorizontalAlign.Center)
-            .margin({ bottom: 20 })
+            // 移除音频图标，保持布局间距
+            // Row()
+            // .width(20)
+            // .height(20)
+            // .margin({ bottom: 0 })
             
             // 文件名
             Text(this.audioRecord.fileName)
@@ -616,19 +733,19 @@ struct AudioDetailPage {
               .maxLines(2)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .textAlign(TextAlign.Center)
-              .margin({ bottom: 8 })
+              .margin({ bottom: 10 })
             
             // 分组信息
             Text(`分组: ${this.getGroupName()}`)
               .fontSize(14)
               .fontColor('#666666')
-              .margin({ bottom: 4 })
+              .margin({ bottom: 8 })
             
             // 创建时间
             Text(`创建于 ${this.formatDate(this.audioRecord.createTime)}`)
               .fontSize(14)
               .fontColor('#999999')
-              .margin({ bottom: 4 })
+              .margin({ bottom: 8 })
             
             // 文件大小和时长
             Row() {
@@ -649,7 +766,7 @@ struct AudioDetailPage {
           .width('100%')
           .padding(24)
           .backgroundColor('#FFFFFF')
-          .margin({ top: 8, bottom: 8 })
+          .margin({ top: 4, bottom: 4 })
           .justifyContent(FlexAlign.Center)
           .alignItems(HorizontalAlign.Center)
 
@@ -687,7 +804,7 @@ struct AudioDetailPage {
                 })
             }
             .width('100%')
-            .margin({ bottom: 24 })
+            .margin({ bottom: 8 })
             
             // 播放控制按钮
             Row() {
@@ -708,42 +825,47 @@ struct AudioDetailPage {
               
               Blank()
               
-              // 播放/暂停按钮
+              // 主播放控制按钮
               Button() {
-                Image($r('app.media.icon'))
-                  .width(32)
-                  .height(32)
-                  .fillColor('#FFFFFF')
+                Column() {
+                  if (this.playState === PlayState.PLAYING) {
+                    // 播放中显示暂停图标
+                    Row()
+                      .width(20)
+                      .height(20)
+                      .backgroundColor('#FFFFFF')
+                      .borderRadius(2)
+                  } else if (this.playState === PlayState.PAUSED) {
+                    // 暂停状态显示播放图标
+                    Circle()
+                      .width(24)
+                      .height(24)
+                      .fill('#FFFFFF')
+                  } else {
+                    // 停止/空闲状态显示播放图标
+                    Circle()
+                      .width(24)
+                      .height(24)
+                      .fill('#FFFFFF')
+                  }
+                }
               }
-              .width(80)
-              .height(80)
-              .backgroundColor(this.playState === PlayState.PLAYING ? '#FF3B30' : '#007AFF')
+              .width(70)
+              .height(70)
+              .backgroundColor(this.getPlayButtonColor())
               .borderRadius(40)
-              .onClick(() => this.togglePlayPause())
+              .onClick(() => this.handleMainPlayButton())
               
               Blank()
-              
-              // 停止按钮
-              Button() {
-                Image($r('app.media.icon'))
-                  .width(20)
-                  .height(20)
-                  .fillColor('#666666')
-              }
-              .width(60)
-              .height(60)
-              .backgroundColor('#F5F5F5')
-              .borderRadius(30)
-              .onClick(() => this.stopPlayback())
             }
             .width('100%')
             .alignItems(VerticalAlign.Center)
             
             // 音量控制
             Row() {
-              Image($r('app.media.icon'))
-                .width(16)
-                .height(16)
+              Image($r('app.media.Audio'))
+                .width(50)
+                .height(50)
                 .fillColor('#666666')
                 .margin({ right: 12 })
               
@@ -762,7 +884,7 @@ struct AudioDetailPage {
                 })
               
               Text(`${Math.round(this.volume)}%`)
-                .fontSize(12)
+                .fontSize(16)
                 .fontColor('#666666')
                 .width(40)
                 .textAlign(TextAlign.End)
@@ -772,7 +894,7 @@ struct AudioDetailPage {
             .margin({ top: 20 })
           }
           .width('100%')
-          .padding(24)
+          .padding(21)
           .backgroundColor('#FFFFFF')
           .margin({ bottom: 8 })
 
@@ -799,7 +921,7 @@ struct AudioDetailPage {
                 .onClick(() => this.showGroupSelectionDialog())
             }
             .width('100%')
-            .margin({ bottom: 12 })
+            .margin({ bottom: 8 })
             
             Button('删除音频')
               .fontSize(16)
@@ -808,7 +930,11 @@ struct AudioDetailPage {
               .borderRadius(8)
               .width('100%')
               .height(44)
-              .onClick(() => this.showDeleteConfirmDialog())
+              .onClick(() => {
+                const timestamp = new Date().toISOString();
+                hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🔘 删除音频按钮被点击`);
+                this.showDeleteConfirmDialog();
+              })
           }
           .width('100%')
           .padding(24)
@@ -834,59 +960,88 @@ struct DeleteConfirmDialog {
 
   build() {
     Column() {
-      Text('删除音频')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#333333')
-        .margin({ bottom: 16 })
-      
-      Text(`确定要删除"${this.fileName}"吗？`)
-        .fontSize(16)
-        .fontColor('#666666')
-        .textAlign(TextAlign.Center)
-        .margin({ bottom: 8 })
-      
-      Text('删除后无法恢复')
-        .fontSize(14)
-        .fontColor('#FF3B30')
-        .textAlign(TextAlign.Center)
-        .margin({ bottom: 20 })
-      
-      Row() {
-        Button('取消')
+      Column() {
+        // 标题
+        Text('删除音频')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#333333')
+          .width('100%')
+          .textAlign(TextAlign.Center)
+          .margin({ bottom: 20 })
+        
+        // 提示文本
+        Column() {
+          Text(`确定要删除"${this.fileName}"吗？`)
+            .fontSize(16)
+            .fontColor('#666666')
+            .textAlign(TextAlign.Center)
+            .width('100%')
+            .margin({ bottom: 8 })
+          
+          Text('删除后无法恢复')
+            .fontSize(14)
+            .fontColor('#FF3B30')
+            .textAlign(TextAlign.Center)
+            .width('100%')
+        }
+        .width('100%')
+        .margin({ bottom: 30 })
+        
+        // 按钮区域
+        Row() {
+          Button() {
+            Text('取消')
+              .fontSize(16)
+              .fontColor('#666666')
+          }
           .fontSize(16)
           .fontColor('#666666')
           .backgroundColor('#F5F5F5')
           .borderRadius(8)
           .width(100)
-          .height(40)
+          .height(44)
           .onClick(() => {
+            const timestamp = new Date().toISOString();
+            hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🔘 对话框取消按钮被点击`);
             if (this.onCancel) {
               this.onCancel();
             }
           })
-        
-        Blank()
-        
-        Button('删除')
+          
+          Blank()
+          
+          Button() {
+            Text('删除')
+              .fontSize(16)
+              .fontColor('#FFFFFF')
+          }
           .fontSize(16)
           .fontColor('#FFFFFF')
           .backgroundColor('#FF3B30')
           .borderRadius(8)
           .width(100)
-          .height(40)
+          .height(44)
           .onClick(() => {
+            const timestamp = new Date().toISOString();
+            hilog.info(DOMAIN, 'AudioDetailPage', `[${timestamp}] 🔘 对话框删除按钮被点击`);
             if (this.onConfirm) {
               this.onConfirm();
             }
           })
+        }
+        .width('100%')
+        .justifyContent(FlexAlign.SpaceBetween)
       }
       .width('100%')
+      .padding(24)
+      .backgroundColor('#FFFFFF')
+      .borderRadius(16)
+      .shadow({ radius: 16, color: '#00000030' })
     }
-    .width(300)
-    .padding(20)
-    .backgroundColor('#FFFFFF')
-    .borderRadius(12)
+    .width(320)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
   }
 }
 
