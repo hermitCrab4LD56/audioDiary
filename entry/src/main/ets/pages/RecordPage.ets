@@ -572,13 +572,13 @@ struct RecordPage {
       // 顶部导航栏
       Row() {
         Button() {
-          Image($r('app.media.icon'))
-            .width(20)
-            .height(20)
+          Image($r('app.media.back_button'))
+            .width(140)
+            .height(70)
             .fillColor('#333333')
         }
-        .width(40)
-        .height(40)
+        .width(140)
+        .height(70)
         .backgroundColor('transparent')
         .onClick(() => this.navigateBack())
         
@@ -693,8 +693,8 @@ struct RecordPage {
             }
           }
         }
-        .width(80)
-        .height(80)
+        .width(70)
+        .height(70)
         .backgroundColor(this.getRecordButtonColor())
         .borderRadius(40)
         .enabled(!this.isInitializing)
@@ -730,22 +730,7 @@ struct RecordPage {
             .borderRadius(25)
             .width(80)
             .height(50)
-            .onClick(() => {
-              const timestamp = new Date().toISOString();
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🎯 ========== 完成按钮被点击 ==========`);
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 📊 当前录音状态: ${this.recordState}`);
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] ⏱️ 当前录音时长: ${this.recordDuration}ms (${this.formatDuration(this.recordDuration)})`);
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🔊 当前振幅: ${this.currentAmplitude}`);
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 📈 波形数据点数: ${this.waveformData.length}`);
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 💾 已保存的录音结果: ${this.savedRecordResult ? '存在' : '不存在'}`);
-              if (this.savedRecordResult) {
-                hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 📂 保存的文件路径: '${this.savedRecordResult.filePath}'`);
-                hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] ⏱️ 保存的时长: ${this.savedRecordResult.duration}ms`);
-                hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 📊 保存的文件大小: ${this.savedRecordResult.fileSize} bytes`);
-              }
-              hilog.info(DOMAIN, 'RecordPage', `[${timestamp}] 🚀 开始调用 stopRecording() 方法`);
-              this.stopRecording();
-            })
+            .onClick(() => this.stopRecording())
         }
       }
       .width('100%')

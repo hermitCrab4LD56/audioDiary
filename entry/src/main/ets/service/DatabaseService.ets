@@ -204,15 +204,7 @@ export class DatabaseService {
       isTop: record.isTop,
       groupId: record.groupId || 0 // 0表示未分组
     };
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 💾 数据库保存 - 创建新记录对象:`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 记录ID: ${newRecord.id}`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 文件名: '${newRecord.fileName}'`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 文件路径: '${newRecord.filePath}'`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 时长: ${newRecord.duration}ms`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 文件大小: ${newRecord.fileSize} bytes`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 创建时间: ${new Date(newRecord.createTime).toLocaleString()}`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 分组ID: ${newRecord.groupId}`);
-    hilog.info(DOMAIN, TAG, `[${timestamp}] 📝 完整记录对象: ${JSON.stringify(newRecord)}`);
+    hilog.info(DOMAIN, TAG, `[${timestamp}] Created new record object: ${JSON.stringify(newRecord)}`);
 
     records.push(newRecord);
     hilog.info(DOMAIN, TAG, `[${timestamp}] Added new record to list, current total: ${records.length}`);

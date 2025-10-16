@@ -449,18 +449,6 @@ struct Index {
           .borderRadius(15)
           .margin({ right: 8 })
           .onClick(() => this.cleanupData())
-          
-          Button() {
-            Image($r('app.media.icon'))
-              .width(20)
-              .height(20)
-              .fillColor('#666666')
-          }
-          .width(40)
-          .height(40)
-          .backgroundColor('#F5F5F5')
-          .borderRadius(20)
-          .onClick(() => this.navigateToGroup())
         }
         .width('100%')
         .height(56)
@@ -469,12 +457,6 @@ struct Index {
 
         // 搜索框
         Row() {
-          Image($r('app.media.icon'))
-            .width(16)
-            .height(16)
-            .fillColor('#999999')
-            .margin({ right: 8 })
-          
           TextInput({ placeholder: '搜索音频文件', text: this.searchKeyword })
             .backgroundColor('transparent')
             .border({ width: 0 })
@@ -540,28 +522,13 @@ struct Index {
           .alignItems(HorizontalAlign.Center)
         } else {
           List() {
-            ForEach(this.getCurrentAudioList(), (audioRecord: AudioRecord, index?: number) => {
+            ForEach(this.getCurrentAudioList(), (audioRecord: AudioRecord) => {
               ListItem() {
                 this.AudioRecordItemBuilder(audioRecord)
               }
               .swipeAction({ end: this.SwipeActionsBuilder(audioRecord) })
-              .onAppear(() => {
-                const timestamp = new Date().toISOString();
-                hilog.info(DOMAIN, 'Index', `[${timestamp}] 🎨 UI渲染 - 渲染音频记录项 #${index !== undefined ? index + 1 : '?'}`);
-                hilog.info(DOMAIN, 'Index', `[${timestamp}] 📝 记录详情: ID=${audioRecord.id}, 文件名='${audioRecord.fileName}', 创建时间=${new Date(audioRecord.createTime).toLocaleString()}`);
-                hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 记录属性: 时长=${audioRecord.duration}ms, 文件大小=${audioRecord.fileSize}bytes, 置顶=${audioRecord.isTop}`);
-              })
             })
           }
-          .onAppear(() => {
-            const timestamp = new Date().toISOString();
-            const currentList = this.getCurrentAudioList();
-            hilog.info(DOMAIN, 'Index', `[${timestamp}] 🎨 List组件渲染完成`);
-            hilog.info(DOMAIN, 'Index', `[${timestamp}] 📊 当前渲染的音频记录总数: ${currentList.length}`);
-            if (currentList.length === 0) {
-              hilog.warn(DOMAIN, 'Index', `[${timestamp}] ⚠️ 没有音频记录可显示 - 列表为空`);
-            }
-          })
           .width('100%')
           .layoutWeight(1)
           .backgroundColor('#F8F8F8')
@@ -612,15 +579,15 @@ struct Index {
         // 底部录音按钮
         Row() {
           Button() {
-            Image($r('app.media.icon'))
-              .width(24)
-              .height(24)
+            Image($r('app.media.record'))
+              .width(50)
+              .height(50)
               .fillColor('#FFFFFF')
           }
-          .width(56)
-          .height(56)
+          .width(70)
+          .height(70)
           .backgroundColor('#007AFF')
-          .borderRadius(28)
+          .borderRadius(40)
           .onClick(() => this.navigateToRecord())
         }
         .width('100%')
