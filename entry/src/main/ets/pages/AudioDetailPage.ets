@@ -29,7 +29,9 @@ struct AudioDetailPage {
   @State isShowDeleteDialog: boolean = false;
   @State isShowRenameDialog: boolean = false;
   @State isShowGroupDialog: boolean = false;
+  @State isShowCreateGroupDialog: boolean = false;
   @State newFileName: string = '';
+  @State newGroupName: string = '';
   @State availableGroups: AudioGroup[] = [];
   @State selectedGroupId: number = 0;
   
@@ -41,6 +43,7 @@ struct AudioDetailPage {
   private deleteDialogController: CustomDialogController | null = null;
   private renameDialogController: CustomDialogController | null = null;
   private groupDialogController: CustomDialogController | null = null;
+  private createGroupDialogController: CustomDialogController | null = null;
 
   async aboutToAppear(): Promise<void> {
     hilog.info(DOMAIN, 'AudioDetailPage', 'Page aboutToAppear');
@@ -350,12 +353,33 @@ struct AudioDetailPage {
         groups: this.availableGroups,
         selectedGroupId: this.selectedGroupId,
         onConfirm: (groupId: number) => this.moveToGroup(groupId),
-        onCancel: () => this.closeGroupDialog()
+        onCancel: () => this.closeGroupDialog(),
+        onCreateNew: () => {
+          this.closeGroupDialog();
+          this.showCreateGroupDialog();
+        }
       }),
       autoCancel: false,
       alignment: DialogAlignment.Center
     });
     this.groupDialogController.open();
+  }
+
+  /**
+   * 显示新建分组对话框
+   */
+  private showCreateGroupDialog(): void {
+    this.newGroupName = '';
+    this.createGroupDialogController = new CustomDialogController({
+      builder: CreateGroupDialog({
+        groupName: this.newGroupName,
+        onConfirm: (name: string) => this.createNewGroup(name),
+        onCancel: () => this.closeCreateGroupDialog()
+      }),
+      autoCancel: false,
+      alignment: DialogAlignment.Center
+    });
+    this.createGroupDialogController.open();
   }
 
   /**
@@ -451,36 +475,69 @@ struct AudioDetailPage {
   }
 
   /**
-   * 移动到分组
+   * 添加到分组（支持多分组）
    */
   private async moveToGroup(groupId: number): Promise<void> {
     try {
       if (!this.audioRecord) return;
       
-      const updatedRecord: AudioRecord = {
-        id: this.audioRecord.id,
-        fileName: this.audioRecord.fileName,
-        filePath: this.audioRecord.filePath,
-        duration: this.audioRecord.duration,
-        fileSize: this.audioRecord.fileSize,
-        groupId: groupId === 0 ? undefined : groupId,
-        isTop: this.audioRecord.isTop,
-        createTime: this.audioRecord.createTime
-      } as AudioRecord;
+      // 🔥 多分组支持：使用addAudioToGroup添加，而不是替换
+      await this.databaseService.addAudioToGroup(this.audioRecord.id, groupId);
       
-      await this.databaseService.updateAudioRecord(updatedRecord);
-      this.audioRecord = updatedRecord;
-      this.selectedGroupId = groupId;
+      // 重新加载音频记录以获取最新的groupIds
+      const updatedRecord = await this.databaseService.getAudioRecordById(this.audioRecord.id);
+      if (updatedRecord) {
+        this.audioRecord = updatedRecord;
+      }
       
-      const groupName = groupId === 0 ? 'Ungrouped' : 
-        this.availableGroups.find(g => g.id === groupId)?.groupName || 'Unknown Group';
+      // 重新加载分组列表
+      await this.loadGroups();
       
-      this.showToast(`Moved to ${groupName}`);
+      const groupName = groupId === 0 ? '未分组' : 
+        this.availableGroups.find(g => g.id === groupId)?.groupName || '未知分组';
+      
+      this.showToast(`已添加到 ${groupName}`);
       this.closeGroupDialog();
       
     } catch (error) {
-      hilog.error(DOMAIN, 'AudioDetailPage', `Failed to move to group: ${JSON.stringify(error)}`);
-      this.showToast('Failed to move to group');
+      hilog.error(DOMAIN, 'AudioDetailPage', `Failed to add to group: ${JSON.stringify(error)}`);
+      this.showToast('添加到分组失败');
+    }
+  }
+
+  /**
+   * 创建新分组
+   */
+  private async createNewGroup(groupName: string): Promise<void> {
+    try {
+      if (!groupName || groupName.trim() === '') {
+        this.showToast('分组名称不能为空');
+        return;
+      }
+
+      hilog.info(DOMAIN, 'AudioDetailPage', `Creating new group: ${groupName}`);
+      
+      // 创建新分组
+      const newGroupId = await this.databaseService.createGroup(groupName.trim());
+      hilog.info(DOMAIN, 'AudioDetailPage', `New group created with ID: ${newGroupId}`);
+      
+      // 重新加载分组列表
+      await this.loadGroups();
+      
+      // 关闭新建分组对话框
+      this.closeCreateGroupDialog();
+      
+      // 显示成功提示
+      this.showToast(`分组 "${groupName}" 创建成功`);
+      
+      // 重新打开分组选择对话框，让用户选择新创建的分组
+      setTimeout(() => {
+        this.showGroupSelectionDialog();
+      }, 300);
+      
+    } catch (error) {
+      hilog.error(DOMAIN, 'AudioDetailPage', `Failed to create group: ${JSON.stringify(error)}`);
+      this.showToast('创建分组失败');
     }
   }
 
@@ -491,6 +548,7 @@ struct AudioDetailPage {
     this.closeDeleteDialog();
     this.closeRenameDialog();
     this.closeGroupDialog();
+    this.closeCreateGroupDialog();
   }
 
   /**
@@ -529,6 +587,17 @@ struct AudioDetailPage {
       this.groupDialogController.close();
       this.groupDialogController = null;
     }
+  }
+
+  /**
+   * 关闭新建分组对话框
+   */
+  private closeCreateGroupDialog(): void {
+    if (this.createGroupDialogController) {
+      this.createGroupDialogController.close();
+      this.createGroupDialogController = null;
+    }
+    this.newGroupName = '';
   }
 
   /**
@@ -910,7 +979,7 @@ struct AudioDetailPage {
                 .height(44)
                 .onClick(() => this.showRenameDialog())
               
-              Button('移动分组')
+              Button('添加到分组')
                 .fontSize(16)
                 .fontColor('#FF9500')
                 .backgroundColor('#FFF8F0')
@@ -1118,52 +1187,30 @@ struct GroupSelectionDialog {
   controller: CustomDialogController = new CustomDialogController({builder: () => {}});
   onConfirm?: (groupId: number) => void;
   onCancel?: () => void;
+  onCreateNew?: () => void;
 
   build() {
     Column() {
-      Text('选择分组')
+      Text('添加到分组')
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor('#333333')
         .margin({ bottom: 20 })
       
-      // 分组列表
-      Column() {
+      // 分组列表（使用List实现滚动）
+      List() {
         // 未分组选项
-        Row() {
-          Radio({ value: '0', group: 'group' })
-            .checked(this.selectedGroupId === 0)
-            .onChange((isChecked: boolean) => {
-              if (isChecked) {
-                this.selectedGroupId = 0;
-              }
-            })
-          
-          Text('未分组')
-            .fontSize(16)
-            .fontColor('#333333')
-            .margin({ left: 12 })
-            .layoutWeight(1)
-        }
-        .width('100%')
-        .height(44)
-        .alignItems(VerticalAlign.Center)
-        .onClick(() => {
-          this.selectedGroupId = 0;
-        })
-        
-        // 分组选项
-        ForEach(this.groups, (group: AudioGroup) => {
+        ListItem() {
           Row() {
-            Radio({ value: group.id.toString(), group: 'group' })
-              .checked(this.selectedGroupId === group.id)
+            Radio({ value: '0', group: 'group' })
+              .checked(this.selectedGroupId === 0)
               .onChange((isChecked: boolean) => {
                 if (isChecked) {
-                  this.selectedGroupId = group.id;
+                  this.selectedGroupId = 0;
                 }
               })
             
-            Text(group.groupName)
+            Text('未分组')
               .fontSize(16)
               .fontColor('#333333')
               .margin({ left: 12 })
@@ -1173,13 +1220,66 @@ struct GroupSelectionDialog {
           .height(44)
           .alignItems(VerticalAlign.Center)
           .onClick(() => {
-            this.selectedGroupId = group.id;
+            this.selectedGroupId = 0;
           })
+        }
+        
+        // 分组选项
+        ForEach(this.groups, (group: AudioGroup) => {
+          ListItem() {
+            Row() {
+              Radio({ value: group.id.toString(), group: 'group' })
+                .checked(this.selectedGroupId === group.id)
+                .onChange((isChecked: boolean) => {
+                  if (isChecked) {
+                    this.selectedGroupId = group.id;
+                  }
+                })
+              
+              Text(group.groupName)
+                .fontSize(16)
+                .fontColor('#333333')
+                .margin({ left: 12 })
+                .layoutWeight(1)
+            }
+            .width('100%')
+            .height(44)
+            .alignItems(VerticalAlign.Center)
+            .onClick(() => {
+              this.selectedGroupId = group.id;
+            })
+          }
         })
+        
+        // 新建分组选项
+        ListItem() {
+          Row() {
+            Text('+ 新建分组')
+              .fontSize(16)
+              .fontColor('#007AFF')
+              .fontWeight(FontWeight.Medium)
+          }
+          .width('100%')
+          .height(44)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+          .backgroundColor('#F0F8FF')
+          .borderRadius(8)
+          .onClick(() => {
+            if (this.onCreateNew) {
+              this.onCreateNew();
+            }
+          })
+        }
+        .margin({ top: 8 })
       }
       .width('100%')
-      .height(200)
+      .height(240)
       .margin({ bottom: 20 })
+      .divider({
+        strokeWidth: 0.5,
+        color: '#E5E5E5'
+      })
       
       Row() {
         Button('取消')
@@ -1213,6 +1313,72 @@ struct GroupSelectionDialog {
       .width('100%')
     }
     .width(320)
+    .padding(20)
+    .backgroundColor('#FFFFFF')
+    .borderRadius(12)
+  }
+}
+
+// 新建分组对话框
+@CustomDialog
+struct CreateGroupDialog {
+  @State groupName: string = '';
+  controller: CustomDialogController = new CustomDialogController({builder: () => {}});
+  onConfirm?: (name: string) => void;
+  onCancel?: () => void;
+
+  build() {
+    Column() {
+      Text('新建分组')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#333333')
+        .margin({ bottom: 20 })
+      
+      TextInput({ placeholder: '请输入分组名称', text: this.groupName })
+        .width('100%')
+        .height(44)
+        .backgroundColor('#F8F8F8')
+        .borderRadius(8)
+        .padding({ left: 12, right: 12 })
+        .margin({ bottom: 20 })
+        .onChange((value: string) => {
+          this.groupName = value;
+        })
+      
+      Row() {
+        Button('取消')
+          .fontSize(16)
+          .fontColor('#666666')
+          .backgroundColor('#F5F5F5')
+          .borderRadius(8)
+          .width(100)
+          .height(40)
+          .onClick(() => {
+            if (this.onCancel) {
+              this.onCancel();
+            }
+          })
+        
+        Blank()
+        
+        Button('创建')
+          .fontSize(16)
+          .fontColor('#FFFFFF')
+          .backgroundColor('#007AFF')
+          .borderRadius(8)
+          .width(100)
+          .height(40)
+          .enabled(this.groupName.trim().length > 0)
+          .onClick(() => {
+            if (this.onConfirm) {
+              this.onConfirm(this.groupName);
+            }
+          })
+      }
+      .width('100%')
+    }
+    .width(300)
     .padding(20)
     .backgroundColor('#FFFFFF')
     .borderRadius(12)

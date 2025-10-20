@@ -9,7 +9,8 @@ export interface AudioRecord {
   fileSize: number; // 文件大小，单位：字节
   createTime: number; // 创建时间戳
   isTop: boolean; // 是否置顶
-  groupId?: number; // 所属分组ID，可选
+  groupId?: number; // 所属分组ID，可选（向后兼容，用于迁移）
+  groupIds?: number[]; // 所属分组ID数组，支持多分组
 }
 
 /**

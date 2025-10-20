@@ -90,11 +90,53 @@ export class DatabaseService {
       await this.dataPreferences.put(this.NEXT_GROUP_ID_KEY, 1);
     }
 
-    // 初始化记录数据
+    // 初始化记录数据并进行数据迁移
     const records = await this.getAllRecords();
     if (records.length === 0) {
       await this.dataPreferences.put(this.RECORDS_KEY, JSON.stringify([]));
       await this.dataPreferences.put(this.NEXT_RECORD_ID_KEY, 1);
+    } else {
+      // 🔥 数据迁移：将旧的groupId转换为groupIds数组
+      let needsMigration = false;
+      const migratedRecords = records.map(record => {
+        if (record.groupId !== undefined && !record.groupIds) {
+          needsMigration = true;
+          // 如果有groupId但没有groupIds，进行迁移
+          const migratedRecord: AudioRecord = {
+            id: record.id,
+            fileName: record.fileName,
+            filePath: record.filePath,
+            duration: record.duration,
+            fileSize: record.fileSize,
+            createTime: record.createTime,
+            isTop: record.isTop,
+            groupId: record.groupId,
+            groupIds: record.groupId ? [record.groupId] : []
+          };
+          return migratedRecord;
+        } else if (!record.groupIds) {
+          // 如果既没有groupId也没有groupIds，初始化为空数组
+          needsMigration = true;
+          const migratedRecord: AudioRecord = {
+            id: record.id,
+            fileName: record.fileName,
+            filePath: record.filePath,
+            duration: record.duration,
+            fileSize: record.fileSize,
+            createTime: record.createTime,
+            isTop: record.isTop,
+            groupId: record.groupId,
+            groupIds: []
+          };
+          return migratedRecord;
+        }
+        return record;
+      });
+      
+      if (needsMigration) {
+        hilog.info(DOMAIN, TAG, '执行数据迁移：groupId -> groupIds');
+        await this.saveRecords(migratedRecords);
+      }
     }
 
     await this.dataPreferences.flush();
@@ -255,7 +297,8 @@ export class DatabaseService {
       fileSize: record.fileSize,
       createTime: record.createTime,
       isTop: record.isTop,
-      groupId: record.groupId || 0 // 0表示未分组
+      groupId: record.groupId || 0, // 0表示未分组（向后兼容）
+      groupIds: record.groupId ? [record.groupId] : [] // 🔥 多分组支持：初始化groupIds数组
     };
     hilog.info(DOMAIN, TAG, `[${timestamp}] Created new record object: ${JSON.stringify(newRecord)}`);
 
@@ -589,11 +632,16 @@ export class DatabaseService {
       throw new Error('Database not initialized');
     }
 
-    // 将该分组下的音频移到未分组状态
+    // 🔥 多分组支持：从所有音频的groupIds中移除该分组ID
     const records = await this.getAllRecords();
     records.forEach(record => {
+      // 处理新版本的groupIds数组
+      if (record.groupIds && record.groupIds.includes(id)) {
+        record.groupIds = record.groupIds.filter(gid => gid !== id);
+      }
+      // 兼容旧版本的groupId
       if (record.groupId === id) {
-        record.groupId = 0; // 0表示未分组
+        record.groupId = undefined;
       }
     });
     await this.saveRecords(records);
@@ -608,7 +656,7 @@ export class DatabaseService {
   }
 
   /**
-   * 添加音频到分组
+   * 添加音频到分组（支持多分组，不会移除其他分组）
    */
   public async addAudioToGroup(audioId: number, groupId: number): Promise<void> {
     if (!this.dataPreferences) {
@@ -619,31 +667,58 @@ export class DatabaseService {
     const record = records.find(r => r.id === audioId);
     
     if (record) {
-      const oldGroupId = record.groupId;
-      record.groupId = groupId;
+      // 🔥 多分组支持：添加到groupIds数组
+      if (!record.groupIds) {
+        record.groupIds = [];
+      }
+      
+      // 如果该分组不在列表中，则添加
+      if (!record.groupIds.includes(groupId)) {
+        record.groupIds.push(groupId);
+        await this.saveRecords(records);
+        
+        // 更新分组的音频数量
+        await this.updateGroupAudioCount(groupId);
+      }
+    }
+  }
+
+  /**
+   * 从分组移除音频
+   */
+  public async removeAudioFromGroup(audioId: number, groupId: number): Promise<void> {
+    if (!this.dataPreferences) {
+      throw new Error('Database not initialized');
+    }
+
+    const records = await this.getAllRecords();
+    const record = records.find(r => r.id === audioId);
+    
+    if (record && record.groupIds) {
+      // 🔥 多分组支持：从groupIds数组中移除指定分组
+      record.groupIds = record.groupIds.filter(gid => gid !== groupId);
       await this.saveRecords(records);
       
-      // 更新相关分组的音频数量
-      if (oldGroupId) {
-        await this.updateGroupAudioCount(oldGroupId);
-      }
+      // 更新分组的音频数量
       await this.updateGroupAudioCount(groupId);
     }
   }
 
   /**
-   * 从分组移除音频（移到未分组状态）
-   */
-  public async removeAudioFromGroup(audioId: number): Promise<void> {
-    await this.addAudioToGroup(audioId, 0);
-  }
-
-  /**
-   * 根据分组ID查询音频记录
+   * 根据分组ID查询音频记录（支持多分组）
    */
   public async queryAudioRecordsByGroup(groupId: number): Promise<AudioRecord[]> {
     const records = await this.getAllRecords();
-    const filteredRecords = records.filter(record => record.groupId === groupId);
+    
+    // 🔥 多分组支持：检查groupIds数组是否包含该分组ID
+    const filteredRecords = records.filter(record => {
+      // 优先使用新版本的groupIds
+      if (record.groupIds) {
+        return record.groupIds.includes(groupId);
+      }
+      // 兼容旧版本的groupId
+      return record.groupId === groupId;
+    });
     
     return filteredRecords.sort((a, b) => {
       if (a.isTop !== b.isTop) {
@@ -654,13 +729,21 @@ export class DatabaseService {
   }
 
   /**
-   * 更新分组音频数量
+   * 更新分组音频数量（支持多分组）
    */
   private async updateGroupAudioCount(groupId: number): Promise<void> {
     if (!this.dataPreferences) return;
 
     const records = await this.getAllRecords();
-    const count = records.filter(record => record.groupId === groupId).length;
+    
+    // 🔥 多分组支持：统计groupIds中包含该分组ID的记录数
+    const count = records.filter(record => {
+      if (record.groupIds) {
+        return record.groupIds.includes(groupId);
+      }
+      // 兼容旧版本
+      return record.groupId === groupId;
+    }).length;
     
     const groups = await this.getAllGroups();
     const group = groups.find(g => g.id === groupId);

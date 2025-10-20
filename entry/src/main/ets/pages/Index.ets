@@ -38,6 +38,8 @@ struct Index {
   @State private newGroupName: string = '';
   @State private renameGroupName: string = '';
   @State private selectedTabForAction: DynamicTab | null = null;
+  private longPressTimer: number = -1;
+  private longPressTab: DynamicTab | null = null;
 
   private databaseService: DatabaseService = DatabaseService.getInstance();
   private context = getContext(this) as common.UIAbilityContext;
@@ -149,8 +151,14 @@ struct Index {
       // 暂时移除收藏功能，后续会删除收藏tab
       this.favoriteRecords = [];
       if (this.currentTab === TabType.GROUP && this.currentGroupId) {
-        // 从所有记录中筛选出指定分组的记录
-        this.groupRecords = records.filter(record => record.groupId === this.currentGroupId);
+        // 🔥 多分组支持：从所有记录中筛选出指定分组的记录
+        this.groupRecords = records.filter(record => {
+          if (record.groupIds) {
+            return record.groupIds.includes(this.currentGroupId);
+          }
+          // 兼容旧版本
+          return record.groupId === this.currentGroupId;
+        });
       }
       
     } catch (error) {
@@ -209,15 +217,31 @@ struct Index {
   }
 
   private initializeDynamicTabs(): void {
-    this.dynamicTabs = [
-      { id: 0, type: TabType.ALL, name: '全部' },
-      ...this.audioGroups.map((group, index): DynamicTab => ({
+    const timestamp = new Date().toISOString();
+    
+    // 🔥 关键修复：不使用扩展运算符，改用数组拼接
+    const tabs: DynamicTab[] = [];
+    
+    // 添加"全部"标签
+    tabs.push({ id: 0, type: TabType.ALL, name: '全部' });
+    
+    // 添加分组标签
+    this.audioGroups.forEach((group, index) => {
+      tabs.push({
         id: index + 1,
         type: TabType.GROUP,
         name: group.groupName,
         groupId: group.id
-      }))
-    ];
+      });
+    });
+    
+    this.dynamicTabs = tabs;
+    
+    hilog.info(DOMAIN, 'Index', `[${timestamp}] 🏷️ 动态标签初始化完成，共${tabs.length}个标签:`);
+    this.dynamicTabs.forEach((tab, idx) => {
+      hilog.info(DOMAIN, 'Index', `[${timestamp}]   Tab${idx}: name="${tab.name}", type=${tab.type} (${typeof tab.type}), groupId=${tab.groupId}`);
+    });
+    hilog.info(DOMAIN, 'Index', `[${timestamp}]   TabType.ALL=${TabType.ALL}, TabType.GROUP=${TabType.GROUP}`);
   }
 
   private showGroupSelectionDialogMethod(): void {
@@ -357,35 +381,6 @@ struct Index {
     });
   }
 
-  /**
-   * 清理损坏的数据
-   */
-  private async cleanupData(): Promise<void> {
-    try {
-      this.isLoading = true;
-      await this.databaseService.cleanupCorruptedData();
-      
-      // 重新加载数据
-      await this.loadAudioRecords();
-      await this.loadAudioGroups();
-      await this.initializeDynamicTabs();
-      
-      // 显示成功提示
-      promptAction.showToast({
-        message: '数据清理完成',
-        duration: 2000
-      });
-    } catch (error) {
-      hilog.error(DOMAIN, 'Index', `Failed to cleanup data: ${JSON.stringify(error)}`);
-      promptAction.showToast({
-        message: '数据清理失败',
-        duration: 2000
-      });
-    } finally {
-      this.isLoading = false;
-    }
-  }
-
   private toggleRecordSelection(recordId: number): void {
     const newSelectedRecords = new Set(this.multiSelectState.selectedRecords);
     if (newSelectedRecords.has(recordId)) {
@@ -452,21 +447,6 @@ struct Index {
             .fontSize(20)
             .fontWeight(FontWeight.Bold)
             .fontColor('#333333')
-          
-          Blank()
-          
-          // 数据清理按钮（调试用）
-          Button() {
-            Text('清理')
-              .fontSize(12)
-              .fontColor('#FF6B35')
-          }
-          .width(50)
-          .height(30)
-          .backgroundColor('#FFF3E0')
-          .borderRadius(15)
-          .margin({ right: 8 })
-          .onClick(() => this.cleanupData())
         }
         .width('100%')
         .height(56)
@@ -495,22 +475,48 @@ struct Index {
         if (!this.isSearchMode) {
           Row() {
             ForEach(this.dynamicTabs, (tab: DynamicTab, index?: number) => {
-              Button(tab.name)
-                .fontSize(14)
-                .fontColor((this.currentTab === tab.type && this.currentGroupId === tab.groupId) ? '#007AFF' : '#666666')
-                .backgroundColor('transparent')
-                .border({ width: 0 })
-                .margin({ left: (index !== undefined && index > 0) ? 24 : 0 })
-                .onClick(() => this.onTabChange(tab.type, tab.groupId))
-                .gesture(
-                  tab.type === TabType.GROUP ? 
-                    LongPressGesture({ repeat: false })
-                      .onAction(() => {
-                        this.selectedTabForAction = tab;
-                        this.showTabContextMenu = true;
-                      }) : 
-                    undefined
-                )
+              // 🔥 关键修复：同时使用手势和触摸事件，确保长按能被捕获
+              Column() {
+                Text(tab.name)
+                  .fontSize(14)
+                  .fontColor((this.currentTab === tab.type && this.currentGroupId === tab.groupId) ? '#007AFF' : '#666666')
+                  .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+              }
+              .margin({ left: (index !== undefined && index > 0) ? 24 : 0 })
+              .onClick(() => {
+                // 清除长按定时器
+                if (this.longPressTimer !== -1) {
+                  clearTimeout(this.longPressTimer);
+                  this.longPressTimer = -1;
+                }
+                
+                hilog.info(DOMAIN, 'Index', `点击Tab: ${tab.name}, type=${tab.type}`);
+                this.onTabChange(tab.type, tab.groupId);
+              })
+              .onTouch((event) => {
+                if (tab.type !== TabType.GROUP) {
+                  return;
+                }
+                
+                if (event.type === TouchType.Down) {
+                  // 开始长按计时
+                  hilog.info(DOMAIN, 'Index', `👇 TouchDown on ${tab.name}`);
+                  this.longPressTab = tab;
+                  this.longPressTimer = setTimeout(() => {
+                    hilog.info(DOMAIN, 'Index', `⏰ 长按触发: ${tab.name}`);
+                    this.selectedTabForAction = tab;
+                    this.showTabContextMenu = true;
+                    this.longPressTimer = -1;
+                  }, 500); // 500ms长按时间
+                } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+                  // 取消长按计时
+                  hilog.info(DOMAIN, 'Index', `👆 TouchUp/Cancel on ${tab.name}`);
+                  if (this.longPressTimer !== -1) {
+                    clearTimeout(this.longPressTimer);
+                    this.longPressTimer = -1;
+                  }
+                }
+              })
             })
             
             Blank()
@@ -617,33 +623,72 @@ struct Index {
       .width('100%')
       .height('100%')
 
-      // Tab长按菜单
+      // Tab长按菜单（居中显示的对话框样式）
       if (this.showTabContextMenu) {
-        Column() {
-          Button('重命名')
-            .fontSize(16)
-            .fontColor('#333333')
-            .backgroundColor('#FFFFFF')
+        Stack() {
+          // 半透明背景遮罩
+          Column()
             .width('100%')
-            .height(44)
-            .onClick(() => this.showRenameGroupDialogMethod())
+            .height('100%')
+            .backgroundColor('rgba(0, 0, 0, 0.4)')
+            .onClick(() => {
+              hilog.info(DOMAIN, 'Index', '点击遮罩关闭菜单');
+              this.showTabContextMenu = false;
+            })
           
-          Divider()
-            .color('#E5E5E5')
-          
-          Button('删除')
-            .fontSize(16)
-            .fontColor('#FF3B30')
-            .backgroundColor('#FFFFFF')
-            .width('100%')
-            .height(44)
-            .onClick(() => this.deleteGroup())
+          // 菜单内容
+          Column() {
+            Text(`分组: ${this.selectedTabForAction?.name || ''}`)
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#333333')
+              .width('100%')
+              .textAlign(TextAlign.Center)
+              .padding({ top: 16, bottom: 12 })
+            
+            Divider()
+              .color('#E5E5E5')
+            
+            Button('重命名')
+              .fontSize(16)
+              .fontColor('#333333')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => this.showRenameGroupDialogMethod())
+            
+            Divider()
+              .color('#E5E5E5')
+            
+            Button('删除')
+              .fontSize(16)
+              .fontColor('#FF3B30')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => this.deleteGroup())
+            
+            Divider()
+              .color('#E5E5E5')
+              .strokeWidth(8)
+            
+            Button('取消')
+              .fontSize(16)
+              .fontColor('#007AFF')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => {
+                this.showTabContextMenu = false;
+              })
+          }
+          .width('80%')
+          .backgroundColor('#FFFFFF')
+          .borderRadius(12)
+          .shadow({ radius: 16, color: 'rgba(0,0,0,0.3)' })
         }
-        .width(120)
-        .backgroundColor('#FFFFFF')
-        .borderRadius(8)
-        .shadow({ radius: 8, color: 'rgba(0,0,0,0.2)' })
-        .position({ x: '50%', y: '30%' })
+        .width('100%')
+        .height('100%')
       }
 
       // 选择分组弹窗
@@ -817,16 +862,10 @@ struct Index {
   AudioRecordItemBuilder(audioRecord: AudioRecord) {
     Row() {
       if (this.multiSelectState.isMultiSelectMode) {
-        Button() {
-          if (this.multiSelectState.selectedRecords.has(audioRecord.id)) {
-            Image($r('app.media.icon'))
-              .width(16)
-              .height(16)
-              .fillColor('#FFFFFF')
-          }
-        }
+        Button()
         .width(24)
         .height(24)
+        .padding(0)
         .backgroundColor(this.multiSelectState.selectedRecords.has(audioRecord.id) ? '#007AFF' : 'transparent')
         .border({ width: 2, color: '#007AFF' })
         .borderRadius(12)
@@ -902,7 +941,8 @@ struct Index {
     .gesture(
       LongPressGesture({ repeat: false })
         .onAction(() => {
-          if (!this.multiSelectState.isMultiSelectMode && this.currentTab === TabType.ALL) {
+          if (!this.multiSelectState.isMultiSelectMode) {
+            hilog.info(DOMAIN, 'Index', `长按音频项进入多选模式: ${audioRecord.fileName}`);
             this.enterMultiSelectMode(audioRecord.id);
           }
         })
