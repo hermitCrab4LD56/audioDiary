@@ -25,7 +25,7 @@ interface DeploymentConfig {
  */
 export class DevConfig {
   // 开发模式标志 - 在生产环境中应设置为 false
-  private static readonly IS_DEV_MODE: boolean = true;
+  private static readonly IS_DEV_MODE: boolean = false;
   
   // 模拟录音配置
   private static readonly MOCK_RECORDING_CONFIG: MockRecordingConfig = {

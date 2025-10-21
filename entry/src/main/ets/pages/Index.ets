@@ -35,6 +35,8 @@ struct Index {
   @State private showCreateGroupDialog: boolean = false;
   @State private showRenameGroupDialog: boolean = false;
   @State private showTabContextMenu: boolean = false;
+  @State private showAudioContextMenu: boolean = false;
+  @State private selectedAudioForAction: AudioRecord | null = null;
   @State private newGroupName: string = '';
   @State private renameGroupName: string = '';
   @State private selectedTabForAction: DynamicTab | null = null;
@@ -214,6 +216,91 @@ struct Index {
       isMultiSelectMode: false,
       selectedRecords: new Set<number>()
     };
+  }
+
+  /**
+   * 批量删除选中的录音
+   */
+  private async batchDeleteRecords(): Promise<void> {
+    const selectedCount = this.multiSelectState.selectedRecords.size;
+    
+    if (selectedCount === 0) {
+      return;
+    }
+    
+    try {
+      hilog.info(DOMAIN, 'Index', `批量删除开始，共 ${selectedCount} 条录音`);
+      
+      // 弹出确认对话框
+      const confirmed = await this.showBatchDeleteConfirmDialog(selectedCount);
+      
+      if (!confirmed) {
+        hilog.info(DOMAIN, 'Index', '用户取消批量删除');
+        return;
+      }
+      
+      // 判断当前是在分组页面还是全部页面
+      if (this.currentTab === TabType.GROUP && this.currentGroupId) {
+        // 在分组页面：从分组中移除（不删除音频记录）
+        hilog.info(DOMAIN, 'Index', `从分组${this.currentGroupId}中移除 ${selectedCount} 条音频`);
+        
+        for (const recordId of this.multiSelectState.selectedRecords) {
+          await this.databaseService.removeAudioFromGroup(recordId, this.currentGroupId);
+        }
+        
+        hilog.info(DOMAIN, 'Index', `✅ 成功从分组中移除 ${selectedCount} 条音频`);
+      } else {
+        // 在全部页面：删除音频记录和文件
+        hilog.info(DOMAIN, 'Index', `删除 ${selectedCount} 条音频记录`);
+        
+        for (const recordId of this.multiSelectState.selectedRecords) {
+          await this.databaseService.deleteAudioRecord(recordId);
+        }
+        
+        hilog.info(DOMAIN, 'Index', `✅ 成功删除 ${selectedCount} 条音频`);
+      }
+      
+      // 刷新列表
+      await this.loadAudioRecords();
+      
+      // 退出多选模式
+      this.exitMultiSelectMode();
+      
+    } catch (error) {
+      hilog.error(DOMAIN, 'Index', `批量删除失败: ${JSON.stringify(error)}`);
+    }
+  }
+
+  /**
+   * 显示批量删除确认对话框
+   */
+  private showBatchDeleteConfirmDialog(count: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const dialogTitle = this.currentTab === TabType.GROUP ? '从分组中移除' : '删除录音';
+      const dialogMessage = this.currentTab === TabType.GROUP 
+        ? `确定要从当前分组中移除 ${count} 条录音吗？（录音不会从"全部"和其他分组中删除）`
+        : `确定要删除 ${count} 条录音吗？此操作无法撤销。`;
+      
+      promptAction.showDialog({
+        title: dialogTitle,
+        message: dialogMessage,
+        buttons: [
+          {
+            text: '取消',
+            color: '#666666'
+          },
+          {
+            text: '确定',
+            color: '#FF3B30'
+          }
+        ]
+      }).then((result) => {
+        // result.index: 0=取消, 1=确定
+        resolve(result.index === 1);
+      }).catch(() => {
+        resolve(false);
+      });
+    });
   }
 
   private initializeDynamicTabs(): void {
@@ -550,7 +637,6 @@ struct Index {
               ListItem() {
                 this.AudioRecordItemBuilder(audioRecord)
               }
-              .swipeAction({ end: this.SwipeActionsBuilder(audioRecord) })
             })
           }
           .width('100%')
@@ -584,12 +670,22 @@ struct Index {
             
             Blank()
             
+            Button('删除')
+              .fontSize(14)
+              .fontColor('#FFFFFF')
+              .backgroundColor('#FF3B30')
+              .borderRadius(8)
+              .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .enabled(this.multiSelectState.selectedRecords.size > 0)
+              .onClick(() => this.batchDeleteRecords())
+            
             Button('添加到分组')
               .fontSize(14)
               .fontColor('#FFFFFF')
               .backgroundColor('#007AFF')
               .borderRadius(8)
               .padding({ left: 16, right: 16, top: 8, bottom: 8 })
+              .margin({ left: 8 })
               .enabled(this.multiSelectState.selectedRecords.size > 0)
               .onClick(() => this.showGroupSelectionDialogMethod())
           }
@@ -680,6 +776,136 @@ struct Index {
               .height(50)
               .onClick(() => {
                 this.showTabContextMenu = false;
+              })
+          }
+          .width('80%')
+          .backgroundColor('#FFFFFF')
+          .borderRadius(12)
+          .shadow({ radius: 16, color: 'rgba(0,0,0,0.3)' })
+        }
+        .width('100%')
+        .height('100%')
+      }
+
+      // 音频长按菜单（置顶/移动到分组/删除）
+      if (this.showAudioContextMenu) {
+        Stack() {
+          // 半透明背景遮罩
+          Column()
+            .width('100%')
+            .height('100%')
+            .backgroundColor('rgba(0, 0, 0, 0.4)')
+            .onClick(() => {
+              this.showAudioContextMenu = false;
+            })
+          
+          // 菜单内容
+          Column() {
+            Text(`${this.selectedAudioForAction?.fileName || ''}`)
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#333333')
+              .width('100%')
+              .textAlign(TextAlign.Center)
+              .padding({ top: 16, bottom: 12 })
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            
+            Divider()
+              .color('#E5E5E5')
+            
+            Button(this.selectedAudioForAction?.isTop ? '取消置顶' : '置顶')
+              .fontSize(16)
+              .fontColor('#FF9500')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => {
+                if (this.selectedAudioForAction) {
+                  this.toggleTopStatus(this.selectedAudioForAction);
+                  this.showAudioContextMenu = false;
+                }
+              })
+            
+            Divider()
+              .color('#E5E5E5')
+            
+            Button('添加到分组')
+              .fontSize(16)
+              .fontColor('#007AFF')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => {
+                if (this.selectedAudioForAction) {
+                  // 进入多选模式，只选中当前音频
+                  this.enterMultiSelectMode(this.selectedAudioForAction.id);
+                  this.showAudioContextMenu = false;
+                  // 显示分组选择对话框
+                  this.showGroupSelectionDialogMethod();
+                }
+              })
+            
+            Divider()
+              .color('#E5E5E5')
+            
+            Button('多选')
+              .fontSize(16)
+              .fontColor('#007AFF')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => {
+                if (this.selectedAudioForAction) {
+                  hilog.info(DOMAIN, 'Index', `进入多选模式，初始选中: ${this.selectedAudioForAction.fileName}`);
+                  this.enterMultiSelectMode(this.selectedAudioForAction.id);
+                  this.showAudioContextMenu = false;
+                }
+              })
+            
+            Divider()
+              .color('#E5E5E5')
+            
+            Button(this.currentTab === TabType.GROUP ? '从分组中移除' : '删除')
+              .fontSize(16)
+              .fontColor('#FF3B30')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(async () => {
+                if (this.selectedAudioForAction) {
+                  try {
+                    if (this.currentTab === TabType.GROUP && this.currentGroupId) {
+                      // 在分组页面：从分组中移除
+                      hilog.info(DOMAIN, 'Index', `从分组${this.currentGroupId}中移除音频: ${this.selectedAudioForAction.fileName}`);
+                      await this.databaseService.removeAudioFromGroup(this.selectedAudioForAction.id, this.currentGroupId);
+                      await this.loadAudioRecords();
+                      this.showAudioContextMenu = false;
+                    } else {
+                      // 在全部页面：删除音频记录
+                      hilog.info(DOMAIN, 'Index', `删除音频记录: ${this.selectedAudioForAction.fileName}`);
+                      await this.databaseService.deleteAudioRecord(this.selectedAudioForAction.id);
+                      await this.loadAudioRecords();
+                      this.showAudioContextMenu = false;
+                    }
+                  } catch (error) {
+                    hilog.error(DOMAIN, 'Index', `Failed to delete/remove audio: ${JSON.stringify(error)}`);
+                  }
+                }
+              })
+            
+            Divider()
+              .color('#E5E5E5')
+              .strokeWidth(8)
+            
+            Button('取消')
+              .fontSize(16)
+              .fontColor('#666666')
+              .backgroundColor('#FFFFFF')
+              .width('100%')
+              .height(50)
+              .onClick(() => {
+                this.showAudioContextMenu = false;
               })
           }
           .width('80%')
@@ -942,40 +1168,14 @@ struct Index {
       LongPressGesture({ repeat: false })
         .onAction(() => {
           if (!this.multiSelectState.isMultiSelectMode) {
-            hilog.info(DOMAIN, 'Index', `长按音频项进入多选模式: ${audioRecord.fileName}`);
-            this.enterMultiSelectMode(audioRecord.id);
+            hilog.info(DOMAIN, 'Index', `长按音频项显示操作菜单: ${audioRecord.fileName}`);
+            this.selectedAudioForAction = audioRecord;
+            this.showAudioContextMenu = true;
           }
         })
     )
   }
 
-  @Builder
-  SwipeActionsBuilder(audioRecord: AudioRecord) {
-    Row() {
-      Button(audioRecord.isTop ? '取消置顶' : '置顶')
-        .fontSize(14)
-        .fontColor('#FFFFFF')
-        .backgroundColor('#FF9500')
-        .width(80)
-        .height('100%')
-        .onClick(() => this.toggleTopStatus(audioRecord))
-      
-      Button('删除')
-        .fontSize(14)
-        .fontColor('#FFFFFF')
-        .backgroundColor('#FF3B30')
-        .width(80)
-        .height('100%')
-        .onClick(async () => {
-          try {
-            await this.databaseService.deleteAudioRecord(audioRecord.id);
-            await this.loadAudioRecords();
-          } catch (error) {
-            hilog.error(DOMAIN, 'Index', `Failed to delete audio record: ${JSON.stringify(error)}`);
-          }
-        })
-    }
-  }
 
   private loginWithHuaweiID(): void {
     const loginRequest = new authentication.HuaweiIDProvider().createLoginWithHuaweiIDRequest();
